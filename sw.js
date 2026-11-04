@@ -1,8 +1,8 @@
 // Offline-first service worker: precache the app shell, then serve from cache and refresh in the background.
-const CACHE = 'myprint-v2';
+const CACHE = 'myprint-v3';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
-  'js/app.js', 'js/store.js', 'js/engine.js', 'js/escpos.js', 'js/render.js', 'js/doc.js', 'js/printer.js', 'js/templates.js', 'js/clipart.js', 'js/sketch.js',
+  'js/app.js', 'js/store.js', 'js/engine.js', 'js/escpos.js', 'js/render.js', 'js/doc.js', 'js/printer.js', 'js/templates.js', 'js/designer.js', 'js/detect.js', 'js/clipart.js', 'js/sketch.js',
   'js/vendor/qrcode.js', 'js/vendor/JsBarcode.all.min.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png',
 ];

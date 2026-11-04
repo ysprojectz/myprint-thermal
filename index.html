@@ -25,8 +25,8 @@
     <b>MyPrint</b><span class="muted hide-sm">Thermal</span>
   </div>
   <nav class="tabs" id="nav" aria-label="Pages">
-    <button data-page="print" class="on"><svg class="ic"><use href="#i-print"/></svg><span>Print</span></button>
-    <button data-page="printer"><svg class="ic"><use href="#i-bt"/></svg><span>Printer</span></button>
+    <button data-page="printer"><svg class="ic"><use href="#i-bt"/></svg><span><b class="stepno">1·2</b> Setup</span></button>
+    <button data-page="print" class="on"><svg class="ic"><use href="#i-print"/></svg><span><b class="stepno">3</b> Design</span></button>
     <button data-page="jobs"><svg class="ic"><use href="#i-list"/></svg><span>Jobs</span><i class="badge" id="jobBadge" hidden>0</i></button>
   </nav>
   <div class="pills">
@@ -41,17 +41,57 @@
 <section class="page on" id="page-print">
   <div class="grid">
     <div class="col-edit">
+      <div class="summary" id="paperSummary"></div>
       <div class="seg" id="kindSeg" role="tablist">
-        <button data-kind="receipt" class="on">Receipt</button>
+        <button data-kind="canvas" class="on">Canvas</button>
+        <button data-kind="receipt">Receipt</button>
         <button data-kind="studio">Studio</button>
         <button data-kind="text">Text</button>
-        <button data-kind="code">QR / Barcode</button>
-        <button data-kind="image">Image</button>
         <button data-kind="raw">Raw</button>
       </div>
 
+      <!-- Canvas -->
+      <div class="card kind on" data-kind="canvas">
+        <div class="tool-row" id="addBar">
+          <button class="tbtn" data-add="text"><b>T</b>Text</button>
+          <button class="tbtn" data-add="image"><b>▣</b>Image</button>
+          <button class="tbtn" data-add="qr"><b>▦</b>QR</button>
+          <button class="tbtn" data-add="barcode"><b>|||</b>Barcode</button>
+          <button class="tbtn" data-add="line"><b>—</b>Line</button>
+          <button class="tbtn" data-add="rect"><b>▭</b>Box</button>
+          <button class="tbtn" data-add="ellipse"><b>◯</b>Circle</button>
+          <button class="tbtn" data-tool="pen"><b>✎</b>Pen</button>
+          <button class="tbtn" data-tool="eraser"><b>⌫</b>Eraser</button>
+        </div>
+        <input type="file" id="imgAdd" accept="image/*" hidden>
+        <div class="tool-row small" id="penRow" hidden>
+          <label class="f inline"><span>Pen size <output id="penOut">4</output></span><input type="range" min="1" max="20" value="4" id="penSize"></label>
+          <button class="btn ghost" id="inkClear">Clear drawing</button>
+          <button class="btn" data-tool="select">Done drawing</button>
+        </div>
+        <div class="tool-row small" id="alignBar">
+          <button class="tbtn s" data-align="left" title="Align left">⇤</button><button class="tbtn s" data-align="center" title="Centre horizontally">↔</button><button class="tbtn s" data-align="right" title="Align right">⇥</button>
+          <button class="tbtn s" data-align="top" title="Align top">⤒</button><button class="tbtn s" data-align="middle" title="Centre vertically">↕</button><button class="tbtn s" data-align="bottom" title="Align bottom">⤓</button>
+          <span class="sep"></span>
+          <button class="tbtn s" data-act="front" title="Bring to front">⬆</button><button class="tbtn s" data-act="back" title="Send to back">⬇</button>
+          <button class="tbtn s" data-act="dup" title="Duplicate (Ctrl+D)">⧉</button><button class="tbtn s danger" data-act="del" title="Delete (Del)">🗑</button>
+          <span class="sep"></span>
+          <button class="tbtn s" data-act="undo" title="Undo (Ctrl+Z)">↶</button><button class="tbtn s" data-act="redo" title="Redo">↷</button>
+        </div>
+        <div id="props" class="props"><p class="hint">Tap an object on the paper to edit it, or add one above. Drag to move, drag a corner to resize, drag the round knob to rotate.</p></div>
+        <details class="fold">
+          <summary>Layout &amp; starters</summary>
+          <div class="fields">
+            <label class="f wide"><span>Start from</span><select id="starter"></select></label>
+            <label class="f" id="rollHeightF"><span>Roll length (mm)</span><input type="number" min="10" max="600" data-d="design.heightMm"></label>
+            <label class="check" id="trimF"><input type="checkbox" data-d="design.trim"> Trim empty paper</label>
+          </div>
+          <div class="row-actions"><button class="btn" id="applyStarter">Apply starter (replaces objects)</button><button class="btn ghost danger" id="clearCanvas">Clear canvas</button></div>
+        </details>
+      </div>
+
       <!-- Receipt -->
-      <div class="card kind on" data-kind="receipt">
+      <div class="card kind" data-kind="receipt">
         <details class="fold">
           <summary>Business details</summary>
           <div class="fields">
@@ -132,43 +172,6 @@
         <p class="hint"><code># Title</code> big centered · <code>## Bold</code> · <code>---</code> dashed rule · <code>===</code> double rule · <code>&gt;&gt; right</code> · <code>&lt;&gt; center</code> · <code>Left | Right</code> two columns · <code>[qr:text]</code> <code>[bar:123456]</code> <code>[feed:3]</code> <code>[cut]</code></p>
       </div>
 
-      <!-- QR / Barcode -->
-      <div class="card kind" data-kind="code">
-        <div class="fields">
-          <label class="f"><span>Type</span><select data-d="code.type" id="codeType"><option value="qr">QR code</option><option value="bar">Barcode</option></select></label>
-          <label class="f"><span>Align</span><select data-d="code.align"><option value="center">Center</option><option value="left">Left</option><option value="right">Right</option></select></label>
-          <label class="f wide"><span>Content</span><input data-d="code.data" autocomplete="off"></label>
-          <label class="f wide"><span>Caption (optional)</span><input data-d="code.caption"></label>
-        </div>
-        <div class="fields" data-show="qr">
-          <label class="f"><span>Module size <output data-out="code.size"></output></span><input type="range" min="2" max="12" data-d="code.size"></label>
-          <label class="f"><span>Error correction</span><select data-d="code.ec"><option value="L">L · 7%</option><option value="M">M · 15%</option><option value="Q">Q · 25%</option><option value="H">H · 30%</option></select></label>
-        </div>
-        <div class="fields" data-show="bar">
-          <label class="f"><span>Format</span><select data-d="code.format"><option value="CODE128">Code 128 (any text)</option><option value="CODE39">Code 39</option><option value="EAN13">EAN-13 (12–13 digits)</option><option value="UPC">UPC-A (11–12 digits)</option><option value="ITF">ITF (even digits)</option></select></label>
-          <label class="f"><span>Height <output data-out="code.height"></output></span><input type="range" min="30" max="160" step="5" data-d="code.height"></label>
-          <label class="f"><span>Bar width <output data-out="code.width"></output></span><input type="range" min="1" max="4" data-d="code.width"></label>
-          <label class="check"><input type="checkbox" data-d="code.hri"> Print text under bars</label>
-        </div>
-      </div>
-
-      <!-- Image -->
-      <div class="card kind" data-kind="image">
-        <label class="drop" id="drop">
-          <input type="file" id="imgFile" accept="image/*" hidden>
-          <b>Choose a logo or picture</b>
-          <span class="muted" id="imgName">PNG, JPG, SVG, WebP — converted to black &amp; white dots</span>
-        </label>
-        <div class="fields">
-          <label class="f"><span>Width <output data-out="image.scale"></output>%</span><input type="range" min="10" max="100" data-d="image.scale"></label>
-          <label class="f"><span>Align</span><select data-d="image.align"><option value="center">Center</option><option value="left">Left</option><option value="right">Right</option></select></label>
-          <label class="f"><span>Dithering</span><select data-d="image.dither"><option value="atkinson">Atkinson (crisp, good for logos)</option><option value="floyd">Floyd–Steinberg (photos)</option><option value="bayer">Ordered / halftone</option><option value="threshold">Threshold (line art)</option></select></label>
-          <label class="f"><span>Brightness <output data-out="image.brightness"></output></span><input type="range" min="-100" max="100" data-d="image.brightness"></label>
-          <label class="f"><span>Contrast <output data-out="image.contrast"></output></span><input type="range" min="-100" max="100" data-d="image.contrast"></label>
-        </div>
-        <button class="btn ghost danger" id="imgClear">Remove image</button>
-      </div>
-
       <!-- Raw -->
       <div class="card kind" data-kind="raw">
         <label class="f wide"><span>ESC/POS bytes (hex, quoted text allowed)</span><textarea data-d="raw.hex" id="rawHex" rows="5" spellcheck="false"></textarea></label>
@@ -198,7 +201,17 @@
         </div>
         <div class="banner warn" id="heatWarn" hidden><b>High head load (&gt;35% black).</b> Solid areas can stall or overheat a battery printer — use Atkinson dithering or raise the delay between chunks (Printer → Transfer speed).</div>
         <div class="banner bad" id="labelWarn" hidden></div>
-        <div class="paper-wrap"><div class="paper" id="paper"><canvas id="prevCanvas"></canvas><div id="labelGuide" hidden></div><pre id="prevHex" hidden></pre></div></div>
+        <div class="stage-bar">
+          <label class="f inline"><span>Zoom</span><select id="zoomSel"><option value="fit">Fit</option><option value="actual">Actual size (1:1 mm)</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
+          <label class="check"><input type="checkbox" id="snapChk" checked> Snap</label>
+          <span class="muted" id="paperInfo"></span>
+        </div>
+        <div class="stage" id="stage">
+          <div class="ruler-corner">mm</div>
+          <canvas id="rulerTop"></canvas>
+          <canvas id="rulerLeft"></canvas>
+          <div class="paper-wrap"><div class="paper" id="paper"><canvas id="prevCanvas"></canvas><canvas id="overlay"></canvas><div id="labelGuide" hidden></div><pre id="prevHex" hidden></pre></div></div>
+        </div>
         <p class="err" id="prevErr" hidden></p>
         <div class="tele" id="tele">
           <span class="chip muted" id="telSpec">—</span>
@@ -229,8 +242,8 @@
 <!-- ============================================================ PRINTER -->
 <section class="page" id="page-printer">
   <div class="cards">
-    <div class="card">
-      <h2>Connection</h2>
+    <div class="card full" id="step1">
+      <div class="step-h"><span class="num">1</span><div><h2>Connect your printer</h2><p class="muted">Once connected, MyPrint asks the printer what it is and configures itself.</p></div></div>
       <p id="connStatus" class="status">Not connected</p>
       <div class="btn-grid">
         <button class="btn primary" id="btnBLE"><svg class="ic"><use href="#i-bt"/></svg> Bluetooth (BLE)</button>
@@ -242,39 +255,75 @@
         <button class="btn ghost danger" id="btnDisc">Disconnect</button>
       </div>
       <ul class="support" id="support"></ul>
+      <div class="detect" id="detectBox" hidden>
+        <div class="head-row"><h3>Detected printer</h3><button class="btn ghost" id="btnDetect">Detect again</button></div>
+        <p class="hint" id="detectSummary"></p>
+        <table class="kv" id="detectTable"></table>
+      </div>
+      <details class="fold">
+        <summary>Printer didn't report much? Paste its self-test text</summary>
+        <p class="hint">Hold the FEED button while switching the printer on, then type or paste the values it prints (one “Name  value” per line). MyPrint reads the model, codepage, baud rate and darkness from it.</p>
+        <textarea id="selfTestText" rows="7" spellcheck="false" placeholder="Version&#9;5806-6605&#10;Language&#9;PC850 [multiple]&#10;Baud rate&#9;115200&#10;Print depth&#9;38 level"></textarea>
+        <div class="row-actions"><button class="btn" id="btnParseSelf">Read &amp; apply</button><button class="btn ghost" id="applyProfile">Fill in my 5806-6605 sheet</button></div>
+      </details>
       <details class="fold">
         <summary>Can't find the printer? Read this</summary>
         <ul class="tips">
           <li>Turn the printer on and keep it close. Do <b>not</b> pair it in the phone's Bluetooth settings first — choose it in the browser picker instead.</li>
-          <li>Web Bluetooth only talks to <b>BLE</b> devices. Your self-test says <i>USB &amp; Bluetooth</i>, so the printer should advertise as BLE under a name like <code>MPT-II</code>, <code>PT-210</code>, <code>MHT-P…</code> or <code>BlueTooth Printer</code>. If it never shows up, it is classic-only: use the desktop <i>Bluetooth classic</i> button, <i>USB</i>, or the RawBT bridge on Android.</li>
-          <li>Android: use Chrome or Edge. Windows / macOS / Linux / ChromeOS: Chrome or Edge. iPhone / iPad: Safari has no Web Bluetooth — install the free <b>Bluefy</b> browser and open this app there.</li>
-          <li>The page must be served over <b>HTTPS</b> (or <code>localhost</code>). See the README for hosting options.</li>
-          <li>“BT Mul Conn: enable” on your printer means one phone may hold the link while another is nearby — disconnect other apps (Printer app, RawBT, etc.) before connecting.</li>
-          <li>If prints are garbled or cut off, switch <b>Transfer speed</b> to <i>Safe</i> below.</li>
+          <li>Web Bluetooth only talks to <b>BLE</b> devices. If the printer never shows up it is classic-only: use the desktop <i>Bluetooth classic</i> button, <i>USB</i>, or the RawBT bridge on Android.</li>
+          <li>Android / desktop: Chrome or Edge. iPhone / iPad: Safari has no Web Bluetooth — use the free <b>Bluefy</b> browser.</li>
+          <li>The page must be served over <b>HTTPS</b> (or <code>localhost</code>).</li>
+          <li>“BT Mul Conn: enable” — disconnect other apps (RawBT, vendor app) before connecting.</li>
+          <li>Garbled print? Set <b>Transfer speed</b> to <i>Safe</i> in Advanced settings.</li>
         </ul>
       </details>
     </div>
 
-    <div class="card">
-      <h2>Your printer (from the self-test)</h2>
-      <table class="kv" id="profileTable"></table>
-      <div class="row-actions"><button class="btn" id="applyProfile">Apply this profile to settings</button></div>
-      <p class="hint">203 dpi / 8 dots per mm is assumed for 58 mm heads, giving 384 printable dots. Use <i>Ruler</i> in Diagnostics to verify.</p>
+    <div class="card full" id="step2">
+      <div class="step-h"><span class="num">2</span><div><h2>Paper &amp; print type</h2><p class="muted">The design area, rulers and print are sized exactly to this paper.</p></div></div>
+      <div class="fields">
+        <label class="f wide"><span>Printer head width</span><select data-s="paper.preset" data-opts="paper"></select></label>
+      </div>
+      <h3>Paper type</h3>
+      <div class="seg" id="paperType">
+        <button data-ptype="roll">Roll — continuous</button>
+        <button data-ptype="label">Label / sticker — fixed size</button>
+      </div>
+      <div class="panel" id="rollPanel"><p class="hint">Continuous roll: the width is the printer head, the length follows your content (Canvas can trim the empty paper).</p></div>
+      <div class="panel" id="labelPanel" hidden>
+        <div class="chips" id="labelChips" aria-label="Common label sizes"></div>
+        <div class="label-grid">
+          <svg viewBox="0 0 200 130" class="diagram" aria-hidden="true">
+            <rect x="30" y="26" width="150" height="80" rx="8" fill="none" stroke="currentColor" stroke-width="2"/>
+            <path d="M30 14h150M30 10v8M180 10v8" stroke="#0ea5e9" stroke-width="2"/><text x="105" y="9" text-anchor="middle" font-size="11" fill="#0ea5e9" id="dgL">Length 50 mm</text>
+            <path d="M16 26v80M12 26h8M12 106h8" stroke="#e11d48" stroke-width="2"/><text x="10" y="70" text-anchor="middle" font-size="11" fill="#e11d48" transform="rotate(-90 10 70)" id="dgH">Height 25 mm</text>
+            <text x="105" y="124" text-anchor="middle" font-size="10" fill="currentColor" opacity=".7">paper feeds this way ↓</text>
+          </svg>
+          <div class="fields">
+            <label class="f"><span>Length (mm) — across the label</span><input type="number" min="10" max="200" step="1" inputmode="numeric" data-s="paper.labelW"></label>
+            <label class="f"><span>Height (mm) — along the feed</span><input type="number" min="8" max="300" step="1" inputmode="numeric" data-s="paper.labelH"></label>
+            <label class="f"><span>Gap between labels (mm)</span><input type="number" min="0" max="10" step="1" data-s="paper.gap"></label>
+            <label class="f"><span>Label sensor</span><select data-s="paper.media"><option value="diecut">Die-cut (gap)</option><option value="blackmark">Black mark</option></select></label>
+          </div>
+        </div>
+        <p class="hint" id="labelNote"></p>
+      </div>
+      <h3>What are you printing?</h3>
+      <div class="ptype-grid" id="ptypeGrid"></div>
+      <div class="row-actions"><button class="btn primary" id="toDesign">Continue to design →</button></div>
     </div>
 
+    <h2 class="section-h">Advanced settings</h2>
+
     <div class="card">
-      <h2>Paper &amp; layout</h2>
+      <h2>Layout details</h2>
       <div class="fields">
-        <label class="f wide"><span>Paper size</span><select data-s="paper.preset" data-opts="paper"></select></label>
         <label class="f" data-show-when="custom"><span>Printable width (dots)</span><input type="number" step="8" min="64" max="1152" data-s="paper.dots"></label>
         <label class="f"><span>Side margin (dots)</span><input type="number" min="0" max="96" step="4" data-s="paper.margin"></label>
         <label class="f"><span>Native font</span><select data-s="font"><option value="A">A · 12×24 (32 cols)</option><option value="B">B · 9×17 (42 cols)</option></select></label>
         <label class="f"><span>Feed after print (lines)</span><input type="number" min="0" max="20" data-s="feed"></label>
         <label class="f"><span>Paper cutter</span><select data-s="cut"><option value="none">None (tear-off)</option><option value="partial">Partial cut</option><option value="full">Full cut</option></select></label>
         <label class="check wide"><input type="checkbox" data-s="drawer"> Open cash drawer after printing</label>
-        <label class="f"><span>Media / sensor</span><select data-s="paper.media"><option value="continuous">Continuous roll</option><option value="diecut">Die-cut labels (gap)</option><option value="blackmark">Black-mark tags</option></select></label>
-        <label class="f"><span>Label height (mm, 0 = auto)</span><input type="number" min="0" max="300" list="hList" data-s="paper.labelH"><datalist id="hList"><option>0</option><option>25</option><option>30</option><option>40</option><option>50</option></datalist></label>
-        <label class="f" data-show-when="label"><span>Label width (mm)</span><input type="number" min="10" max="48" data-s="paper.labelW"></label>
         <label class="f"><span>Line spacing (ESC 3 n)</span><select data-s="paper.lineSpacing"><option value="20">20 · ultra-tight</option><option value="24">24 · compact</option><option value="30">30 · standard</option><option value="42">42 · relaxed</option></select></label>
         <label class="f"><span>Top feed (lines)</span><input type="number" min="0" max="20" data-s="paper.topFeed"></label>
         <label class="f"><span>Preview paper colour</span><select data-s="tint"><option value="white">White</option><option value="yellow">Sticky yellow</option><option value="kraft">Eco kraft</option><option value="blue">Pastel blue</option><option value="pink">Pastel pink</option><option value="archival">Archival matte</option></select></label>

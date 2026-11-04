@@ -3,9 +3,12 @@ import { defaultStudioData } from './templates.js';
 // Persistence: settings in localStorage, print jobs + templates in IndexedDB (works offline).
 
 export const DEFAULT_SETTINGS = {
-  ver: 2,
+  ver: 3,
   // media: continuous | diecut | blackmark; labelW/labelH are the label size in mm (used by the label presets)
-  paper: { preset: '58', dots: 384, margin: 0, media: 'continuous', labelW: 50, labelH: 0, lineSpacing: 30, topFeed: 0 },
+  // type: roll | label. For labels labelW is the LENGTH across the head and labelH the HEIGHT along the feed (mm).
+  paper: { type: 'roll', preset: '58', dots: 384, margin: 0, media: 'continuous', labelW: 50, labelH: 25, gap: 2, lineSpacing: 30, topFeed: 0 },
+  printType: 'receipt', // chosen in Setup step 2: receipt | label | slip | photo | canvas | text
+  setupDone: false,
   tint: 'white',
   buzzer: false, // beep after each print (0x1E, model specific)
   translit: false, // native text: replace symbols the codepage lacks (₹ -> Rs.) instead of switching to graphic mode
@@ -36,7 +39,7 @@ export const DEFAULT_SETTINGS = {
 };
 
 export const DEFAULT_DRAFT = {
-  kind: 'receipt',
+  kind: 'canvas',
   receipt: {
     title: 'RECEIPT', no: '', cashier: '', customer: '', payMethod: 'Cash', paid: 0, note: '',
     discount: 0, discountType: 'amount', qrOn: false, qrData: '', barOn: true,
@@ -46,6 +49,7 @@ export const DEFAULT_DRAFT = {
   code: { type: 'qr', data: 'https://example.com', size: 6, ec: 'M', format: 'CODE128', height: 60, width: 2, hri: true, caption: '', align: 'center' },
   image: { src: null, name: '', scale: 100, dither: 'atkinson', brightness: 0, contrast: 0, align: 'center' },
   studio: { tpl: 'todo', data: defaultStudioData() },
+  design: { objects: [], ink: null, heightMm: 80, trim: true },
   raw: { hex: '1B 40 "Hello from MyPrint" 0A 0A 0A' },
   copies: 1,
 };
@@ -71,7 +75,12 @@ export function loadSettings() {
   const s = loadJSON('myprint.settings', DEFAULT_SETTINGS);
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem('myprint.settings')); } catch { /* ignore */ }
-  if (saved && (saved.ver || 1) < 2) { s.strip = 24; s.ver = 2; } // v2: safer raster band height
+  if (saved && (saved.ver || 1) < 2) s.strip = 24; // v2: safer raster band height
+  if (saved && (saved.ver || 1) < 3) { // v3: roll/label model — old label presets become type=label
+    if (['5025', 'label'].includes(s.paper.preset)) { s.paper.type = 'label'; s.paper.preset = '58'; }
+    s.paper.dots = Math.max(64, s.paper.dots || 384);
+  }
+  s.ver = 3;
   return s;
 }
 export const saveSettings = (s) => saveJSON('myprint.settings', s);

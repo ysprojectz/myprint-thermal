@@ -1,9 +1,11 @@
 import { loadSettings, saveSettings, loadDraft, saveDraft, resetAll, freshSettings, deepMerge, db } from './store.js';
-import { compile, deriveCfg, PAPER_PRESETS } from './engine.js';
+import { compile, compileDesign, deriveCfg, designSize, headDots, PAPER_PRESETS, LABEL_PRESETS } from './engine.js';
 import { CODEPAGES, EscPos, parseHex, hexDump, columns } from './escpos.js';
 import { Printer, LINK_PROFILES, support } from './printer.js';
 import { TEMPLATES } from './templates.js';
 import { initSketch, blankSketch } from './sketch.js';
+import { Editor, STARTERS, drawRulers, FONT_NAMES, DPM } from './designer.js';
+import { parseSelfTest, inferConfig } from './detect.js';
 import {
   receiptBlocks, markupBlocks, codeBlocks, imageBlocks, testPageBlocks, unicodeTestBlocks, receiptNumber, text as textBlock,
 } from './doc.js';
@@ -70,6 +72,7 @@ function setKind(kind) {
   draft.kind = kind;
   $$('#kindSeg button').forEach((b) => b.classList.toggle('on', b.dataset.kind === kind));
   $$('.kind').forEach((c) => c.classList.toggle('on', c.dataset.kind === kind));
+  if (kind === 'canvas') ensureEditor();
   persistDraft();
   schedulePreview();
 }
@@ -100,14 +103,13 @@ function refreshDerived() {
     const p = o.dataset.out;
     o.textContent = get(settings, p) ?? get(draft, p) ?? '';
   }
-  const kind = draft.code.type;
-  $$('[data-show]').forEach((el) => (el.hidden = el.dataset.show !== kind));
   $$('[data-show-when]').forEach((el) => (el.hidden = settings.paper.preset !== el.dataset.showWhen));
   $('#rollLabel').textContent = `Label roll: ${settings.roll.remaining} / ${settings.roll.size}`;
   $('#paper').dataset.tint = settings.tint;
   $('#copies').textContent = draft.copies || 1;
   const mm = (cfg.dots / 8).toFixed(0);
   $('#layoutInfo').textContent = `${cfg.dots} dots (${mm} mm at 203 dpi) · ${columns(cfg)} native columns with font ${cfg.font} · ${cfg.dots - 2 * cfg.margin} dots usable after margins.`;
+  updateSetupUI();
   $('#printLabel').textContent = busy ? 'Printing…' : 'Print';
   $('#printBtn').title = printer.connected ? 'Print now' : 'Printer not connected — the job will be saved to the queue';
   document.documentElement.dataset.theme = settings.theme === 'auto' ? '' : settings.theme;
@@ -344,33 +346,6 @@ function saveBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
-async function loadImageFile(file) {
-  if (!file || !file.type.startsWith('image/')) return toast('Please choose an image file', { err: true });
-  const url = URL.createObjectURL(file);
-  try {
-    const im = new Image();
-    im.src = url;
-    await im.decode();
-    const w0 = im.naturalWidth || 512, h0 = im.naturalHeight || 512;
-    const k = Math.min(1, 1024 / w0);
-    const c = document.createElement('canvas');
-    c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
-    ctx.drawImage(im, 0, 0, c.width, c.height);
-    draft.image.src = c.toDataURL('image/jpeg', 0.92);
-    draft.image.name = file.name;
-    $('#imgName').textContent = `${file.name} · ${c.width}×${c.height}px`;
-    persistDraft(); schedulePreview();
-  } catch { toast('Could not read that image', { err: true }); } finally { URL.revokeObjectURL(url); }
-}
-$('#imgFile').onchange = (e) => loadImageFile(e.target.files[0]);
-$('#imgClear').onclick = () => { draft.image.src = null; draft.image.name = ''; $('#imgName').textContent = 'PNG, JPG, SVG, WebP — converted to black & white dots'; $('#imgFile').value = ''; persistDraft(); schedulePreview(); };
-const drop = $('#drop');
-drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
-drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); loadImageFile(e.dataTransfer.files[0]); };
-
 // ================================================================ blocks + preview
 
 function currentBlocks() {
@@ -380,7 +355,7 @@ function currentBlocks() {
     case 'code': return draft.code.data ? codeBlocks(draft.code) : [];
     case 'image': return imageBlocks(draft.image);
     case 'studio': return TEMPLATES[draft.studio.tpl].build(studioData(), { cfg });
-    default: return [];
+    default: return []; // canvas is handled by compileDesign
   }
 }
 
@@ -391,11 +366,18 @@ function jobLabel() {
     case 'code': return `${draft.code.type === 'qr' ? 'QR' : 'Barcode'}: ${draft.code.data.slice(0, 30)}`;
     case 'image': return draft.image.name || 'Image';
     case 'studio': return TEMPLATES[draft.studio.tpl].name;
+    case 'canvas': return cfg.type === 'label' ? `Label ${cfg.labelL}×${cfg.labelH} mm` : 'Canvas design';
     default: return 'Raw';
   }
 }
 
 let previewTimer, previewSeq = 0, lastComp = null;
+
+/** css px per printer dot for the chosen zoom (8 dots = 1 mm; 96 css dpi => 0.4724 px/dot at true size). */
+function viewScale(W, zoom) {
+  const avail = Math.max(120, $('#stage').clientWidth - 44), mm = 96 / 25.4 / DPM;
+  return zoom === 'fit' ? Math.min(avail / W, 2.4) : zoom === 'actual' ? mm : Number(zoom) * mm;
+}
 
 function clearTelemetry() {
   for (const id of ['telSpec', 'telLen', 'telBytes', 'telHeat']) $('#' + id).textContent = '—';
@@ -436,13 +418,32 @@ async function renderPreview() {
     return;
   }
   canvas.hidden = false; hexEl.hidden = true;
+  const paperEl = $('#paper');
+  paperEl.classList.toggle('label-shape', cfg.type === 'label');
+  if (draft.kind === 'canvas') {
+    paperEl.classList.remove('static'); paperEl.classList.toggle('draw-mode', editor?.tool !== 'select'); paperEl.classList.toggle('select-mode', editor?.tool === 'select');
+    try {
+      ensureEditor();
+      await editor.redraw();
+      const comp = await compileDesign(clone(draft.design), cfg);
+      if (seq !== previewSeq) return;
+      lastComp = comp; updateTelemetry(comp, canvas);
+      $('#modeChip').textContent = 'Canvas · graphic';
+      $('#sizeChip').textContent = `${editor.size.W} × ${editor.size.H} dots · ${(editor.size.W / DPM).toFixed(0)} × ${(editor.size.H / DPM).toFixed(0)} mm`;
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+    return;
+  }
+  paperEl.classList.add('static');
+  { const ov = $('#overlay'); ov.width = ov.height = 1; ov.style.width = ov.style.height = '1px'; }
   try {
     const blocks = currentBlocks();
     const comp = await compile(blocks, cfg);
     if (seq !== previewSeq) return;
     canvas.width = comp.canvas.width; canvas.height = comp.canvas.height;
     canvas.getContext('2d').drawImage(comp.canvas, 0, 0);
-    canvas.style.width = Math.min(comp.canvas.width, 576) + 'px';
+    const sc = viewScale(comp.canvas.width, $('#zoomSel').value);
+    canvas.style.width = Math.round(comp.canvas.width * sc) + 'px'; canvas.style.height = Math.round(comp.canvas.height * sc) + 'px';
+    drawRulers($('#rulerTop'), $('#rulerLeft'), comp.canvas.width, comp.canvas.height, sc);
     lastComp = comp;
     updateTelemetry(comp, canvas);
     $('#modeChip').textContent = comp.mode === 'native' ? 'Native ESC/POS text' : comp.lossy ? 'Graphic · Unicode' : 'Graphic';
@@ -494,7 +495,7 @@ async function runJob(job) {
   if (!needPrinter()) return false;
   busy = true; refreshDerived();
   try {
-    const comp = await compile(clone(job.blocks), cfg, job.force);
+    const comp = job.design ? await compileDesign(clone(job.design), cfg) : await compile(clone(job.blocks), cfg, job.force);
     const one = comp.bytes();
     const bytes = job.copies > 1 ? concat(Array.from({ length: job.copies }, () => one)) : one;
     await printer.write(bytes, { onProgress: setProgress });
@@ -526,13 +527,15 @@ async function createJob(label, blocks, extra = {}) {
 
 function snapshot() {
   if (draft.kind === 'studio') return { kind: 'studio', tpl: draft.studio.tpl, data: clone(studioData()) };
-  if (['receipt', 'text', 'code', 'image'].includes(draft.kind)) return { kind: draft.kind, data: clone(draft[draft.kind]) };
+  if (draft.kind === 'canvas') return { kind: 'canvas', data: clone(draft.design) };
+  if (['receipt', 'text'].includes(draft.kind)) return { kind: draft.kind, data: clone(draft[draft.kind]) };
   return null;
 }
 
 function restoreSnapshot(snap) {
   if (!snap) return toast('This job has no editable copy');
   if (snap.kind === 'studio') { draft.studio.tpl = snap.tpl; draft.studio.data[snap.tpl] = clone(snap.data); renderTplGrid(); renderStudioForm(); }
+  else if (snap.kind === 'canvas') { draft.design = clone(snap.data); editor?.select(null); editor?.resetHistory(); }
   else { draft[snap.kind] = clone(snap.data); if (snap.kind === 'receipt') renderItems(); }
   fillAll(); setKind(snap.kind); go('print');
   toast('Loaded into the editor');
@@ -540,11 +543,14 @@ function restoreSnapshot(snap) {
 
 async function archiveCurrent() {
   if (draft.kind === 'raw') return toast('Nothing to archive');
-  let blocks;
-  try { blocks = currentBlocks(); await compile(clone(blocks), cfg); } catch (e) { return toast(e.message, { err: true }); }
-  if (!blocks.length) return toast('Nothing to archive yet');
+  let blocks = [], design = null;
+  try {
+    if (draft.kind === 'canvas') { design = clone(draft.design); await compileDesign(clone(design), cfg); }
+    else { blocks = currentBlocks(); await compile(clone(blocks), cfg); }
+  } catch (e) { return toast(e.message, { err: true }); }
+  if (draft.kind !== 'canvas' && !blocks.length) return toast('Nothing to archive yet');
   const now = Date.now();
-  await db.put('jobs', { id: uid(), ts: now, doneAt: now, label: jobLabel(), blocks: clone(blocks), copies: 1, status: 'saved', snap: snapshot() });
+  await db.put('jobs', { id: uid(), ts: now, doneAt: now, label: jobLabel(), blocks: clone(blocks), design, copies: 1, status: 'saved', snap: snapshot() });
   toast('Archived in History — print it any time');
   renderJobs();
 }
@@ -555,10 +561,16 @@ async function printCurrent(forceQueue = false) {
     if (!bytes.length) return toast('Nothing to send');
     return sendBytes(bytes);
   }
-  let blocks;
-  try { blocks = currentBlocks(); await compile(clone(blocks), cfg); } catch (e) { return toast(e.message, { err: true }); }
-  if (!blocks.length) return toast('Nothing to print yet');
-  const job = await createJob(jobLabel(), clone(blocks), { snap: snapshot() });
+  let blocks = [], design = null;
+  try {
+    if (draft.kind === 'canvas') {
+      design = clone(draft.design);
+      if (!design.objects.length && !design.ink) return toast('Add something to the canvas first');
+      await compileDesign(clone(design), cfg);
+    } else { blocks = currentBlocks(); await compile(clone(blocks), cfg); }
+  } catch (e) { return toast(e.message, { err: true }); }
+  if (draft.kind !== 'canvas' && !blocks.length) return toast('Nothing to print yet');
+  const job = await createJob(jobLabel(), clone(blocks), { snap: snapshot(), design });
   if (draft.kind === 'receipt' && !draft.receipt.no.trim()) { settings.shop.receiptNo = (+settings.shop.receiptNo || 1) + 1; saveSettings(settings); fillAll(); schedulePreview(); }
   if (printer.connected && !forceQueue) await runJob(job);
   else {
@@ -584,6 +596,7 @@ $('#rawQuick').onclick = (e) => {
 
 async function currentBytes() {
   if (draft.kind === 'raw') return parseHex(draft.raw.hex);
+  if (draft.kind === 'canvas') return (await compileDesign(clone(draft.design), cfg)).bytes();
   const comp = await compile(currentBlocks(), cfg);
   return comp.bytes();
 }
@@ -712,15 +725,6 @@ const PROFILE = [
   ['Print mode', 'S'], ['Speed', '1'], ['Print depth', '38 level'], ['Quality', '4 level'], ['Black label', 'disabled'],
   ['Passive buzzer', 'enabled'], ['BT multi-connection', 'enabled'], ['BT broadcast', '32'],
 ];
-$('#profileTable').innerHTML = PROFILE.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
-$('#applyProfile').onclick = () => {
-  Object.assign(settings, { font: 'A', codepage: 'PC850', mode: 'auto', imageCmd: 'gsv0', densityOn: false, feed: 3, cut: 'none' });
-  settings.paper = { ...settings.paper, preset: '58', dots: 384, margin: 0, media: 'continuous', labelH: 0, lineSpacing: 30 };
-  settings.link.baud = 115200;
-  cfg = deriveCfg(settings); saveSettings(settings); fillAll(); schedulePreview();
-  toast('Settings matched to the self-test profile');
-};
-
 for (const [sel, src, f] of [['paper', PAPER_PRESETS, (v) => v.label], ['codepage', CODEPAGES, (v) => v.label], ['link', LINK_PROFILES, (v) => v.label]])
   $(`[data-opts="${sel}"]`).innerHTML = Object.entries(src).map(([k, v]) => `<option value="${k}">${esc(f(v))}</option>`).join('');
 
@@ -749,6 +753,7 @@ printer.addEventListener('state', async () => {
   if (printer.connected) {
     const id = printer.identity();
     if (id) { settings.last = id; saveSettings(settings); }
+    runDetect();
     const waiting = (await db.all('jobs')).filter((j) => j.status === 'queued').length;
     if (waiting && settings.autoFlush) flushQueue();
     else if (waiting) toast(`${waiting} job${waiting > 1 ? 's' : ''} waiting`, { action: 'Print all', fn: flushQueue });
@@ -828,6 +833,231 @@ $('#resetBtn').onclick = () => {
   resetAll(); location.reload();
 };
 
+// ================================================================ canvas designer
+
+let editor = null;
+let statsTimer;
+function ensureEditor() {
+  if (editor) return editor;
+  editor = new Editor(
+    { display: $('#prevCanvas'), overlay: $('#overlay'), rulerTop: $('#rulerTop'), rulerLeft: $('#rulerLeft'), stage: $('#stage') },
+    {
+      design: () => draft.design,
+      size: () => designSize(draft.design, cfg),
+      changed: (quick) => { persistDraft(); if (!quick) { clearTimeout(statsTimer); statsTimer = setTimeout(refreshCanvasStats, 350); } },
+      selected: (o) => renderProps(o),
+      active: () => draft.kind === 'canvas' && $('#page-print').classList.contains('on'),
+      edit: () => $('#pText')?.focus(),
+    },
+  );
+  editor.resetHistory();
+  $('#starter').innerHTML = Object.entries(STARTERS).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join('');
+  return editor;
+}
+
+async function refreshCanvasStats() {
+  if (draft.kind !== 'canvas') return;
+  try { const comp = await compileDesign(clone(draft.design), cfg); lastComp = comp; updateTelemetry(comp, $('#prevCanvas')); $('#prevErr').hidden = true; }
+  catch (e) { $('#prevErr').textContent = e.message; $('#prevErr').hidden = false; }
+}
+
+function setTool(tool) {
+  ensureEditor();
+  editor.tool = tool === 'eraser' ? 'pen' : tool; // pen & eraser both draw on the ink layer
+  editor.pen.eraser = tool === 'eraser';
+  $$('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === tool));
+  $('#penRow').hidden = tool === 'select';
+  $('#paper').classList.toggle('draw-mode', tool !== 'select');
+  $('#paper').classList.toggle('select-mode', tool === 'select');
+  if (tool !== 'select') editor.select(null);
+  editor.drawOverlay();
+}
+
+$('#addBar').addEventListener('click', (e) => {
+  const add = e.target.closest('[data-add]'), tool = e.target.closest('[data-tool]');
+  ensureEditor();
+  if (tool) return setTool(editor.tool !== 'select' && editor.pen.eraser === (tool.dataset.tool === 'eraser') ? 'select' : tool.dataset.tool);
+  if (!add) return;
+  setTool('select');
+  if (add.dataset.add === 'image') $('#imgAdd').click(); else editor.add(add.dataset.add);
+});
+$('#penRow').addEventListener('click', (e) => {
+  const t = e.target.closest('[data-tool]');
+  if (t) setTool(t.dataset.tool);
+  if (e.target.id === 'inkClear') editor.clearInk();
+});
+$('#penSize').oninput = (e) => { ensureEditor().pen.size = +e.target.value; $('#penOut').textContent = e.target.value; };
+
+async function addImageFile(file) {
+  try {
+    const { url, w, h } = await compressImage(file);
+    ensureEditor();
+    const { W, H } = editor.size, k = Math.min((W * 0.7) / w, H / h > 0 ? (H * 0.9) / h : 1);
+    editor.add('image', { src: url, w: Math.round(w * k), h: Math.round(h * k), natW: w, natH: h });
+    toast('Image added — rotate, resize and optimise it in the panel');
+  } catch { toast('Could not read that image', { err: true }); }
+}
+$('#imgAdd').onchange = (e) => { if (e.target.files[0]) addImageFile(e.target.files[0]); e.target.value = ''; };
+
+$('#alignBar').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  ensureEditor();
+  if (b.dataset.align) return editor.align(b.dataset.align);
+  ({ front: () => editor.order('front'), back: () => editor.order('back'), dup: () => editor.duplicate(), del: () => editor.remove(), undo: () => editor.undo(), redo: () => editor.redo() })[b.dataset.act]?.();
+});
+$('#snapChk').onchange = (e) => { ensureEditor().snap = e.target.checked; };
+$('#zoomSel').onchange = (e) => { if (draft.kind === 'canvas') ensureEditor().setZoom(e.target.value); else schedulePreview(); };
+$('#applyStarter').onclick = () => {
+  ensureEditor();
+  draft.design.objects = STARTERS[$('#starter').value].build(editor.size);
+  editor.select(null); editor.resetHistory(); persistDraft(); editor.redraw(); toast('Starter applied');
+};
+$('#clearCanvas').onclick = () => { ensureEditor(); draft.design.objects = []; draft.design.ink = null; editor.ink = null; editor.select(null); editor.resetHistory(); persistDraft(); editor.redraw(); };
+
+// ----- properties panel for the selected object
+
+const mmv = (v) => (v / DPM).toFixed(1);
+function renderProps(o) {
+  const box = $('#props');
+  if (!o) { box.innerHTML = '<p class="hint">Tap an object on the paper to edit it, or add one above. Drag to move, drag a corner to resize, drag the round knob to rotate. Arrow keys nudge (Shift = 1 mm).</p>'; return; }
+  const num = (k, label, v, min, max, step = 0.5) => `<label class="f"><span>${label}</span><input type="number" data-p="${k}" data-mm="1" min="${min}" max="${max}" step="${step}" value="${mmv(v)}"></label>`;
+  const rng = (k, label, v, min, max) => `<label class="f"><span>${label} <output>${v}</output></span><input type="range" data-p="${k}" min="${min}" max="${max}" value="${v}"></label>`;
+  const chk = (k, label, v) => `<label class="check"><input type="checkbox" data-p="${k}" ${v ? 'checked' : ''}> ${label}</label>`;
+  const sel = (k, label, v, opts) => `<label class="f"><span>${label}</span><select data-p="${k}">${opts.map(([a, b]) => `<option value="${a}"${a === v ? ' selected' : ''}>${b}</option>`).join('')}</select></label>`;
+  const txt = (k, label, v, area) => `<label class="f wide"><span>${label}</span>${area ? `<textarea id="pText" data-p="${k}" rows="3">${esc(v)}</textarea>` : `<input data-p="${k}" value="${esc(v)}">`}</label>`;
+  let h = `<h3>${{ text: 'Text', image: 'Image', qr: 'QR code', barcode: 'Barcode', rect: 'Box', ellipse: 'Circle', line: 'Line' }[o.t]}</h3><div class="fields">`;
+  if (o.t === 'text') h += txt('text', 'Text', o.text, true) + sel('font', 'Font', o.font, Object.entries(FONT_NAMES)) + rng('size', 'Size (dots)', o.size, 10, 140) + sel('align', 'Align', o.align, [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']]) + chk('bold', 'Bold', o.bold) + chk('italic', 'Italic', o.italic) + chk('inv', 'White on black', o.inv);
+  if (o.t === 'image')
+    h += `<div class="wide chips"><button class="chip-btn" data-pa="r90-">⟲ Rotate 90°</button><button class="chip-btn" data-pa="r90+">⟳ Rotate 90°</button><button class="chip-btn" data-pa="flipH">⇋ Flip</button><button class="chip-btn" data-pa="flipV">⇅ Flip</button><button class="chip-btn" data-pa="fit">Fit width</button><button class="chip-btn" data-pa="swap">Replace…</button></div>`
+      + sel('dither', 'Dithering', o.dither, [['atkinson', 'Atkinson (logos, crisp)'], ['floyd', 'Floyd–Steinberg (photos)'], ['bayer', 'Halftone'], ['threshold', 'Threshold (line art)']])
+      + chk('auto', 'Auto-optimise (stretch tones)', o.auto) + rng('brightness', 'Brightness', o.brightness, -100, 100) + rng('contrast', 'Contrast', o.contrast, -100, 100) + chk('invert', 'Invert', o.invert);
+  if (o.t === 'qr') h += txt('data', 'Content', o.data) + sel('ec', 'Error correction', o.ec, [['L', 'L · 7%'], ['M', 'M · 15%'], ['Q', 'Q · 25%'], ['H', 'H · 30%']]);
+  if (o.t === 'barcode') h += txt('data', 'Value', o.data) + sel('format', 'Format', o.format, [['CODE128', 'Code 128'], ['CODE39', 'Code 39'], ['EAN13', 'EAN-13'], ['UPC', 'UPC-A'], ['ITF', 'ITF']]) + chk('hri', 'Show text under bars', o.hri);
+  if (['rect', 'ellipse', 'line'].includes(o.t)) h += rng('lw', 'Line thickness', o.lw, 1, 16) + (o.t === 'line' ? chk('arrow', 'Arrow head', o.arrow) : chk('fill', 'Filled', o.fill));
+  h += '</div><h3>Position &amp; size (mm)</h3><div class="fields">' + num('x', 'X →', o.x, -50, 400) + num('y', 'Y ↓', o.y, -50, 600) + (o.t === 'text' ? '' : num('w', 'Width', o.w, 1, 400)) + (o.t === 'text' ? num('w', 'Box width', o.w, 3, 400) : o.t === 'qr' ? '' : num('h', 'Height', o.h, 0, 600)) + rng('rot', 'Rotation °', Math.round(o.rot), 0, 359) + '</div><div class="chips"><button class="chip-btn" data-pa="rot-">⟲ 90°</button><button class="chip-btn" data-pa="rot+">⟳ 90°</button></div>';
+  box.innerHTML = h;
+}
+
+$('#props').addEventListener('input', (e) => {
+  const k = e.target.dataset.p; if (!k || !editor?.sel) return;
+  let v = e.target.type === 'checkbox' ? e.target.checked : e.target.type === 'range' || e.target.type === 'number' ? Number(e.target.value) : e.target.value;
+  if (e.target.dataset.mm) v = Math.round(v * DPM);
+  if (e.target.type === 'range') e.target.closest('label').querySelector('output').textContent = e.target.value;
+  editor.update({ [k]: v }, e.target.type === 'range' && k === 'rot');
+  clearTimeout(editor.pt2); editor.pt2 = setTimeout(() => editor.commit(), 500);
+});
+$('#props').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-pa]'); if (!b || !editor?.sel) return;
+  const a = b.dataset.pa;
+  if (a === 'r90-') editor.rotate90(-1); else if (a === 'r90+') editor.rotate90(1);
+  else if (a === 'rot-') editor.update({ rot: (editor.sel.rot + 270) % 360 }); else if (a === 'rot+') editor.update({ rot: (editor.sel.rot + 90) % 360 });
+  else if (a === 'flipH') editor.flip('h'); else if (a === 'flipV') editor.flip('v');
+  else if (a === 'fit') editor.fit();
+  else if (a === 'swap') { $('#imgAdd').onchange = async (ev) => { const f = ev.target.files[0]; ev.target.value = ''; $('#imgAdd').onchange = (x) => { if (x.target.files[0]) addImageFile(x.target.files[0]); x.target.value = ''; }; if (f) { const { url } = await compressImage(f); editor.update({ src: url }); } }; $('#imgAdd').click(); return; }
+  commitProps();
+});
+function commitProps() { renderProps(editor.sel); editor.commit(); }
+
+// ================================================================ setup wizard (steps 1 and 2)
+
+const PRINT_TYPES = [
+  { k: 'receipt', name: 'Receipt / invoice', sub: 'Items, tax, total, QR', icon: '🧾', kind: 'receipt', paper: 'roll' },
+  { k: 'label', name: 'Label / sticker', sub: 'Product, address, name tag', icon: '🏷️', kind: 'canvas', paper: 'label', starter: 'product' },
+  { k: 'slip', name: 'Slips & templates', sub: 'To-do, trip, Wi-Fi QR…', icon: '🗒️', kind: 'studio' },
+  { k: 'photo', name: 'Photo & art', sub: 'Import, rotate, optimise', icon: '🖼️', kind: 'canvas', image: true },
+  { k: 'canvas', name: 'Free canvas', sub: 'Text, QR, shapes, drawing', icon: '🎨', kind: 'canvas' },
+  { k: 'text', name: 'Notes / text', sub: 'Quick markup text', icon: '📝', kind: 'text', paper: 'roll' },
+];
+
+function paperText() {
+  return cfg.type === 'label' ? `Label ${cfg.labelL} × ${cfg.labelH} mm` : `${settings.paper.preset === 'custom' ? (headDots(settings) / 8).toFixed(0) : settings.paper.preset} mm roll`;
+}
+
+function updateSetupUI() {
+  $$('#paperType button').forEach((b) => b.classList.toggle('on', b.dataset.ptype === settings.paper.type));
+  $('#rollPanel').hidden = settings.paper.type === 'label';
+  $('#labelPanel').hidden = settings.paper.type !== 'label';
+  $('#dgL').textContent = `Length ${settings.paper.labelW} mm`;
+  $('#dgH').textContent = `Height ${settings.paper.labelH} mm`;
+  $$('#labelChips button').forEach((b) => b.classList.toggle('on', +b.dataset.l === settings.paper.labelW && +b.dataset.h === settings.paper.labelH));
+  const headMm = headDots(settings) / 8;
+  $('#labelNote').textContent = settings.paper.labelW > headMm
+    ? `Your printer head prints ${headMm} mm across, so a ${settings.paper.labelW} mm length is printed ${headMm} mm wide (the outer ${((settings.paper.labelW - headMm) / 2).toFixed(1)} mm cannot be printed).`
+    : `Design area: ${settings.paper.labelW} × ${settings.paper.labelH} mm = ${cfg.dots} × ${Math.round(settings.paper.labelH * 8)} dots, centred on the ${headMm} mm head.`;
+  $$('#ptypeGrid .tpl').forEach((b) => b.classList.toggle('on', b.dataset.pt === settings.printType));
+  const pt = PRINT_TYPES.find((t) => t.k === settings.printType);
+  const sum = $('#paperSummary');
+  sum.innerHTML = `<span>📄 <b>${esc(paperText())}</b></span><span>${pt ? pt.icon + ' ' + esc(pt.name) : ''}</span><span class="muted">${cfg.dots} × ${cfg.type === 'label' ? Math.round(cfg.labelH * 8) : 'auto'} dots</span><button type="button" data-goto="printer">Change</button>`;
+  $('#paperInfo').textContent = `${paperText()} · rulers in mm`;
+  $('#rollHeightF').hidden = $('#trimF').hidden = cfg.type === 'label';
+}
+
+$('#paperSummary').addEventListener('click', (e) => { if (e.target.closest('[data-goto]')) go('printer'); });
+$('#labelChips').innerHTML = LABEL_PRESETS.map(([l, h]) => `<button class="chip-btn" data-l="${l}" data-h="${h}">${l} × ${h} mm</button>`).join('');
+$('#ptypeGrid').innerHTML = PRINT_TYPES.map((t) => `<button class="tpl" data-pt="${t.k}"><i>${t.icon}</i><span><b>${esc(t.name)}</b><small>${esc(t.sub)}</small></span></button>`).join('');
+
+function setPaperType(type) {
+  settings.paper.type = type;
+  if (type === 'label') { if (settings.paper.media === 'continuous') settings.paper.media = 'diecut'; settings.paper.lineSpacing = 20; settings.feed = 0; }
+  else { settings.paper.media = 'continuous'; settings.paper.lineSpacing = 30; settings.feed = 3; }
+  fillAll(); onSettingChanged('paper.type');
+}
+$('#paperType').onclick = (e) => { const b = e.target.closest('[data-ptype]'); if (b) setPaperType(b.dataset.ptype); };
+$('#labelChips').onclick = (e) => {
+  const b = e.target.closest('[data-l]'); if (!b) return;
+  settings.paper.labelW = +b.dataset.l; settings.paper.labelH = +b.dataset.h;
+  if (settings.paper.type !== 'label') setPaperType('label'); else { fillAll(); onSettingChanged('paper.labelW'); }
+};
+$('#ptypeGrid').onclick = (e) => {
+  const b = e.target.closest('[data-pt]'); if (!b) return;
+  const t = PRINT_TYPES.find((x) => x.k === b.dataset.pt);
+  settings.printType = t.k;
+  if (t.paper && settings.paper.type !== t.paper) { setPaperType(t.paper); toast(`Paper set to ${t.paper === 'label' ? 'label' : 'roll'}`); }
+  saveSettings(settings);
+  setKind(t.kind);
+  if (t.starter && !draft.design.objects.length) { ensureEditor(); draft.design.objects = STARTERS[t.starter].build(editor.size); editor.resetHistory(); }
+  updateSetupUI();
+  toast(`${t.name} selected`);
+};
+$('#toDesign').onclick = () => {
+  settings.setupDone = true; saveSettings(settings);
+  go('print');
+  if (settings.printType === 'photo' && draft.kind === 'canvas' && !draft.design.objects.some((o) => o.t === 'image')) $('#imgAdd').click();
+};
+
+// ----- step 1: ask the printer who it is and configure from the answer
+
+let lastSelfTest = null;
+const SRC_CLASS = { read: 'read', 'self-test': 'self-test' };
+
+async function runDetect(selfTest) {
+  if (selfTest) lastSelfTest = selfTest;
+  const box = $('#detectBox');
+  box.hidden = false;
+  $('#detectSummary').textContent = printer.connected ? 'Asking the printer what it is…' : 'Not connected — using the remembered profile.';
+  let info = { name: printer.name || settings.last?.name || '', kind: printer.kind, dis: {}, id: {}, status: {}, battery: null, replied: false };
+  if (printer.connected) { try { info = await printer.probe(); } catch (e) { log(`Probe failed: ${e.message}`, 'err'); } }
+  const res = inferConfig(info, lastSelfTest, { preset: settings.paper.preset, codepage: settings.codepage, baud: settings.link.baud });
+  const pt = res.patch;
+  if (PAPER_PRESETS[pt.preset]) settings.paper.preset = pt.preset;
+  settings.codepage = pt.codepage;
+  settings.link.baud = pt.baud;
+  if (pt.density) settings.density = pt.density;
+  Object.assign(printer.link, settings.link);
+  cfg = deriveCfg(settings); saveSettings(settings); fillAll(); schedulePreview();
+  $('#detectTable').innerHTML = res.facts.map((f) => `<tr><td>${esc(f.label)}</td><td>${esc(f.value)}</td><td class="src ${SRC_CLASS[f.source] || ''}">${esc(f.source)}</td></tr>`).join('');
+  const applied = `${settings.paper.preset === 'custom' ? (headDots(settings) / 8).toFixed(0) : settings.paper.preset} mm head (${headDots(settings)} dots), ${settings.codepage}, ${settings.link.baud} baud`;
+  $('#detectSummary').innerHTML = `${res.replied ? '✓ The printer reported its details.' : 'This printer did not report details over Bluetooth (common for mobile printers), so the settings below come from its name, your self-test and sensible defaults.'} <b>Configured automatically:</b> ${esc(applied)}. Now choose your paper in step 2.`;
+  log(`Auto-configured: ${applied}`);
+}
+$('#btnDetect').onclick = () => runDetect();
+$('#btnParseSelf').onclick = () => {
+  const parsed = parseSelfTest($('#selfTestText').value);
+  if (!parsed.fields.length) return toast('No self-test values found — use one “Name  value” per line', { err: true });
+  runDetect(parsed); toast(`Read ${parsed.fields.length} values from the self-test`);
+};
+$('#applyProfile').onclick = () => { $('#selfTestText').value = PROFILE.map(([k, v]) => `${k}\t${v}`).join('\n'); $('#btnParseSelf').click(); };
+
 // ================================================================ network, install, service worker
 
 function updateNet() {
@@ -870,8 +1100,9 @@ renderTemplates();
 renderSupport();
 updateNet();
 updateConnUI();
+if (!['canvas', 'receipt', 'studio', 'text', 'raw'].includes(draft.kind)) draft.kind = 'canvas';
 setKind(draft.kind);
-if (draft.image.src) $('#imgName').textContent = draft.image.name || 'Saved image';
-$('#appInfo').textContent = `MyPrint 1.1 · ${matchMedia('(display-mode: standalone)').matches ? 'running as installed app' : 'running in browser'} · data stays on this device`;
+$('#appInfo').textContent = `MyPrint 2.0 · ${matchMedia('(display-mode: standalone)').matches ? 'running as installed app' : 'running in browser'} · data stays on this device`;
 renderJobs();
 if (settings.autoReconnect && settings.last) printer.reconnect(settings.last);
+go(settings.setupDone ? 'print' : 'printer');

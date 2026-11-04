@@ -5,7 +5,7 @@ const BT = (n) => `0000${n}-0000-1000-8000-00805f9b34fb`;
 
 // Vendor services used by the common generic ESC/POS BLE printers. Web Bluetooth only exposes services listed here.
 const BLE_SERVICES = [
-  BT('18f0'), BT('ffe0'), BT('ff00'), BT('fff0'), BT('fee7'), BT('ae30'), BT('af30'), BT('1101'), BT('1800'),
+  BT('180a'), BT('180f'), BT('18f0'), BT('ffe0'), BT('ff00'), BT('fff0'), BT('fee7'), BT('ae30'), BT('af30'), BT('1101'), BT('1800'),
   '49535343-fe7d-4ae5-8fa9-9fafd205e455', // ISSC transparent UART
   'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // common 58mm printers
   '0000fe59-0000-1000-8000-00805f9b34fb',
@@ -80,6 +80,7 @@ export class Printer extends EventTarget {
       device.addEventListener('gattserverdisconnected', this._onDrop);
       const server = await withTimeout(device.gatt.connect(), 15000, 'Timed out connecting — is the printer on and in range?');
       const services = await server.getPrimaryServices();
+      this._services = services;
       const candidates = [];
       const notify = [];
       for (const svc of services) {
@@ -97,7 +98,7 @@ export class Printer extends EventTarget {
       for (const n of notify.slice(0, 2)) {
         try {
           await n.startNotifications();
-          n.addEventListener('characteristicvaluechanged', (e) => this.log(`← ${hex(new Uint8Array(e.target.value.buffer))}`, 'rx'));
+          n.addEventListener('characteristicvaluechanged', (e) => this._rx(new Uint8Array(e.target.value.buffer.slice(e.target.value.byteOffset, e.target.value.byteOffset + e.target.value.byteLength))));
         } catch { /* notifications are optional */ }
       }
       this.log(`Using characteristic ${char.uuid}`);
@@ -159,6 +160,7 @@ export class Printer extends EventTarget {
       await port.open({ baudRate: this.link.baud || 115200, bufferSize: 8192 });
       this._port = port;
       this._writer = port.writable.getWriter();
+      this._readLoop(port);
       this._serOnDisc = (e) => { if (e.target === port) this._dropped(); };
       navigator.serial.addEventListener('disconnect', this._serOnDisc);
       this.log(`Serial opened at ${this.link.baud} baud`);
@@ -225,6 +227,7 @@ export class Printer extends EventTarget {
       }
       if ((this.kind === 'serial' || this.kind === 'spp') && this._port) {
         navigator.serial.removeEventListener('disconnect', this._serOnDisc);
+        try { await this._reader?.cancel(); } catch { /* ignore */ }
         this._writer?.releaseLock();
         await this._port.close().catch(() => {});
       }
@@ -262,6 +265,59 @@ export class Printer extends EventTarget {
       case 'serial': case 'spp': await this._writer.write(part); break;
       case 'sim': this.sim.push(part.slice()); break;
     }
+  }
+
+  _rx(bytes) {
+    this.log(`← ${hex(bytes)}`, 'rx');
+    this.dispatchEvent(new CustomEvent('rx', { detail: bytes }));
+  }
+
+  async _readLoop(port) {
+    try {
+      this._reader = port.readable.getReader();
+      for (;;) { const { value, done } = await this._reader.read(); if (done) break; if (value?.length) this._rx(value); }
+    } catch { /* port closed */ }
+  }
+
+  /** Writes a short command and returns whatever the printer answers within `ms` (empty if it stays silent). */
+  async query(bytes, ms = 500) {
+    const got = [];
+    const on = (e) => got.push(...e.detail);
+    this.addEventListener('rx', on);
+    try { await this.write(Uint8Array.from(bytes)); await sleep(ms); } finally { this.removeEventListener('rx', on); }
+    return Uint8Array.from(got);
+  }
+
+  /**
+   * Asks the printer who it is. Sources, in order: BLE Device Information + Battery services, ESC/POS `GS I`
+   * identification and `DLE EOT` status. Many cheap printers answer none of these — `replied` says whether any did.
+   */
+  async probe() {
+    const info = { name: this.name, kind: this.kind, dis: {}, id: {}, status: {}, battery: null, replied: false };
+    const dec = (v) => new TextDecoder().decode(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)).replace(/\0/g, '').trim();
+    if (this.kind === 'ble') {
+      for (const svc of this._services || []) {
+        try {
+          if (svc.uuid === BT('180a'))
+            for (const [k, u] of Object.entries({ manufacturer: '2a29', model: '2a24', serial: '2a25', hardware: '2a27', firmware: '2a26', software: '2a28' }))
+              try { const v = dec(await (await svc.getCharacteristic(BT(u))).readValue()); if (v) info.dis[k] = v; } catch { /* characteristic absent */ }
+          if (svc.uuid === BT('180f')) info.battery = (await (await svc.getCharacteristic(BT('2a19'))).readValue()).getUint8(0);
+        } catch { /* service unreadable */ }
+      }
+    }
+    if (this.kind !== 'sim') {
+      const ascii = (u8) => String.fromCharCode(...[...u8].filter((b) => b >= 32 && b < 127)).trim();
+      for (const [k, n] of [['model', 67], ['firmware', 65], ['manufacturer', 66]]) { // GS I n
+        const r = await this.query([0x1d, 0x49, n], 450);
+        if (r.length) { info.replied = true; const t = ascii(r); if (t) info.id[k] = t; }
+      }
+      const paper = await this.query([0x10, 0x04, 0x04], 450); // DLE EOT 4: roll paper sensor
+      if (paper.length) { info.replied = true; info.status.paper = paper[0] & 0x60 ? 'out' : paper[0] & 0x0c ? 'low' : 'ok'; }
+      const online = await this.query([0x10, 0x04, 0x01], 450); // DLE EOT 1: printer status
+      if (online.length) { info.replied = true; info.status.online = !(online[0] & 0x08); }
+    }
+    this.log(`Probe: ${info.replied ? 'printer answered ESC/POS queries' : 'no ESC/POS replies (normal for many mobile printers)'}`);
+    return info;
   }
 
   /** Sends bytes in paced chunks. Jobs are serialised so two prints never interleave. */

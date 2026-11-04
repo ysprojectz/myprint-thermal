@@ -91,9 +91,10 @@ export class EscPos {
       this.cmd(0x1b, 0x74, CODEPAGES[c.codepage]?.id ?? 2); // ESC t n
       this.cmd(0x1b, 0x4d, c.font === 'B' ? 1 : 0); // ESC M n
       if (c.lineSpacing) this.cmd(0x1b, 0x33, clamp(c.lineSpacing, 0, 255)); // ESC 3 n
-      if (c.margin > 0) {
+      const left = c.margin + (c.offset || 0); // label narrower than the head is centred with a left margin
+      if (left > 0) {
         const w = c.dots - 2 * c.margin;
-        this.cmd(0x1d, 0x4c, c.margin & 255, c.margin >> 8); // GS L
+        this.cmd(0x1d, 0x4c, left & 255, left >> 8); // GS L
         this.cmd(0x1d, 0x57, w & 255, w >> 8); // GS W
       }
     }

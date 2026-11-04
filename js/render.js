@@ -114,17 +114,52 @@ async function imageToBW(b, cw) {
   ctx.fillRect(0, 0, w, h);
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(im, 0, 0, w, h);
-  const px = ctx.getImageData(0, 0, w, h).data;
+  return bwFromCanvas(c, b);
+}
+
+/**
+ * Grayscale canvas -> 1-bit canvas. opts: dither, brightness, contrast, invert, threshold,
+ * auto (stretch the histogram so washed-out photos and scans use the full black-to-white range first).
+ */
+export function bwFromCanvas(c, o = {}) {
+  const w = c.width, h = c.height;
+  const px = ctx2d(c).getImageData(0, 0, w, h).data;
   const gray = new Float32Array(w * h);
-  const br = (b.brightness || 0) * 2.55;
-  const ct = b.contrast || 0;
-  const f = (259 * (ct + 255)) / (255 * (259 - ct));
-  for (let i = 0; i < gray.length; i++) {
-    const lum = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
-    const v = Math.min(255, Math.max(0, f * (lum - 128) + 128 + br));
-    gray[i] = b.invert ? 255 - v : v;
+  for (let i = 0; i < gray.length; i++) gray[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+  let lo = 0, hi = 255;
+  if (o.auto) { // 2nd..98th percentile stretch
+    const hist = new Uint32Array(256);
+    for (const v of gray) hist[v | 0]++;
+    const cut = gray.length * 0.02;
+    for (let a = 0, i = 0; i < 256; i++) { a += hist[i]; if (a > cut) { lo = i; break; } }
+    for (let a = 0, i = 255; i >= 0; i--) { a += hist[i]; if (a > cut) { hi = i; break; } }
+    if (hi - lo < 40) { lo = 0; hi = 255; }
   }
-  return bwCanvas(dither(gray, w, h, b.dither || 'atkinson', b.threshold || 128), w, h);
+  const br = (o.brightness || 0) * 2.55, ct = o.contrast || 0, f = (259 * (ct + 255)) / (255 * (259 - ct));
+  for (let i = 0; i < gray.length; i++) {
+    let v = ((gray[i] - lo) / (hi - lo)) * 255;
+    v = Math.min(255, Math.max(0, f * (v - 128) + 128 + br));
+    gray[i] = o.invert ? 255 - v : v;
+  }
+  return bwCanvas(dither(gray, w, h, o.dither || 'atkinson', o.threshold || 128), w, h);
+}
+
+/** Helpers used by the interactive canvas designer. */
+export { newCanvas, ctx2d, loadImage };
+export function qrBitmap(data, ec = 'M', mod = 4) {
+  const q = qrMatrix(data, ec), n = q.getModuleCount();
+  const c = newCanvas(n * mod, n * mod), ctx = ctx2d(c);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) ctx.fillRect(k * mod, r * mod, mod, mod);
+  return c;
+}
+export function barcodeBitmap(data, format = 'CODE128', height = 60, hri = true, width = 2) {
+  const c = document.createElement('canvas');
+  try {
+    JsBarcode(c, String(data), { format, width, height, displayValue: hri, margin: 0, fontSize: 18, textMargin: 3, background: '#ffffff', lineColor: '#000000', font: 'monospace' });
+  } catch { throw new Error(`"${data}" is not valid for ${format}`); }
+  return c;
 }
 
 function patternCanvas(kind, cw) {

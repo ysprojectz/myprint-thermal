@@ -1,30 +1,35 @@
 // Turns blocks into a preview canvas + printer bytes, choosing native ESC/POS text or graphic mode.
 import { layoutNative, layoutLossy, buildNative, buildRasterJob, columns } from './escpos.js';
+import { renderDesign, trimCanvas, padToHead } from './designer.js';
 import { prepareBlocks, renderRaster, renderNativePreview, attachPreviewCanvases, packCanvas, blackRatio } from './render.js';
 
-const HEAD_DOTS = 384; // printable dots of a 58 mm head (48 mm)
-
-// `apply` values are copied into settings.paper when the preset is chosen.
+// Printer head width presets (printable dots at 203 dpi = 8 dots per mm).
 export const PAPER_PRESETS = {
-  58: { label: '58 mm roll — 384 dots (your printer)', dots: 384, apply: { media: 'continuous', labelH: 0, lineSpacing: 30 } },
-  5025: { label: '50 × 25 mm label — length 50, height 25', dots: 384, apply: { media: 'diecut', labelW: 50, labelH: 25, lineSpacing: 20 }, feed: 0 },
-  label: { label: 'Custom label size (width × height mm)…', dots: 384, apply: { media: 'diecut', lineSpacing: 20 }, feed: 0 },
-  80: { label: '80 mm roll — 576 dots', dots: 576, apply: { media: 'continuous', labelH: 0, lineSpacing: 30 } },
-  76: { label: '76 mm roll — 512 dots', dots: 512, apply: { media: 'continuous', labelH: 0, lineSpacing: 30 } },
-  50: { label: '50 mm roll — 368 dots', dots: 368, apply: { media: 'continuous', labelH: 0, lineSpacing: 30 } },
-  38: { label: '38 mm mini roll — 256 dots', dots: 256, apply: { media: 'continuous', labelH: 0, lineSpacing: 30 } },
-  custom: { label: 'Custom width…', dots: 384 },
+  58: { label: '58 mm head — 384 dots (your printer)', dots: 384 },
+  80: { label: '80 mm head — 576 dots', dots: 576 },
+  76: { label: '76 mm head — 512 dots', dots: 512 },
+  50: { label: '50 mm head — 368 dots', dots: 368 },
+  38: { label: '38 mm head — 256 dots', dots: 256 },
+  custom: { label: 'Custom head width…', dots: 384 },
 };
 
+// [length, height] in mm. LENGTH runs across the label (the print-head direction), HEIGHT runs along the paper feed.
+export const LABEL_PRESETS = [[50, 25], [40, 30], [40, 20], [30, 20], [48, 30], [48, 50], [25, 50]];
+
+export function headDots(s) {
+  return s.paper.preset === 'custom' ? s.paper.dots : (PAPER_PRESETS[s.paper.preset] || PAPER_PRESETS[58]).dots;
+}
+
 export function deriveCfg(s) {
-  const preset = PAPER_PRESETS[s.paper.preset] || PAPER_PRESETS[58];
-  let dots = preset.dots;
-  if (s.paper.preset === 'custom') dots = s.paper.dots;
-  if (s.paper.preset === 'label') dots = Math.min(HEAD_DOTS, Math.floor(((s.paper.labelW || 50) * 8) / 8) * 8); // 8 dots per mm
+  const head = Math.max(64, Math.min(1152, Math.round(headDots(s) / 8) * 8));
+  const label = s.paper.type === 'label';
+  // Label: design area is exactly length x height; narrower than the head => centred on the head.
+  const dots = label ? Math.max(64, Math.min(head, Math.floor((s.paper.labelW || 50) * 8 / 8) * 8)) : head;
   return {
-    dots: Math.max(64, Math.min(1152, Math.round(dots / 8) * 8)),
+    type: label ? 'label' : 'roll', pageDots: head, dots, offset: label ? Math.floor((head - dots) / 16) * 8 : 0,
     margin: Math.max(0, Math.round(s.paper.margin || 0)),
-    media: s.paper.media || 'continuous', labelH: s.paper.labelH || 0,
+    labelL: label ? s.paper.labelW : 0, labelH: label ? s.paper.labelH || 25 : 0,
+    media: label ? (s.paper.media === 'continuous' ? 'diecut' : s.paper.media || 'diecut') : 'continuous',
     lineSpacing: s.paper.lineSpacing || 30, topFeed: s.paper.topFeed || 0,
     font: s.font, mode: s.mode, codepage: s.codepage,
     feed: s.feed, cut: s.cut, drawer: s.drawer, buzzer: !!s.buzzer,
@@ -33,6 +38,25 @@ export function deriveCfg(s) {
     imageCmd: s.imageCmd, strip: s.strip, threshold: s.threshold,
     rasterFont: s.raster.font, rasterSize: s.raster.size, lineGap: s.raster.lineGap,
   };
+}
+
+/** Size in dots of the designer canvas for the chosen paper. */
+export function designSize(design, cfg) {
+  return { W: cfg.dots, H: cfg.type === 'label' ? Math.round(cfg.labelH * 8) : Math.round((design.heightMm || 80) * 8) };
+}
+
+function statsOf(data, canvas, cfg) {
+  const feedMm = ((cfg.feed + cfg.topFeed) * cfg.lineSpacing) / 8;
+  return { bytes: data.length, rows: canvas.height, mm: Math.round(canvas.height / 8 + feedMm), duty: blackRatio(canvas) };
+}
+
+/** Canvas designer -> same result shape as compile(). Rolls are trimmed to the content; labels keep their fixed size. */
+export async function compileDesign(design, cfg) {
+  const size = designSize(design, cfg);
+  let canvas = await renderDesign(design, size);
+  if (cfg.type !== 'label' && design.trim) canvas = trimCanvas(canvas);
+  const data = buildRasterJob(packCanvas(padToHead(canvas, cfg.pageDots), 128), cfg);
+  return { mode: 'raster', lossy: false, cols: columns(cfg), canvas, bytes: () => data, stats: statsOf(data, canvas, cfg) };
 }
 
 /**
@@ -54,10 +78,9 @@ export async function compile(blocks, cfg, forceMode) {
     attachPreviewCanvases(layout);
     mode = 'native'; canvas = renderNativePreview(layout, cfg); build = () => buildNative(layout, cfg);
   } else {
-    mode = 'raster'; canvas = renderRaster(blocks, cfg); build = () => buildRasterJob(packCanvas(canvas, 128), cfg);
+    mode = 'raster'; canvas = renderRaster(blocks, cfg); build = () => buildRasterJob(packCanvas(padToHead(canvas, cfg.pageDots), 128), cfg);
   }
   const data = build();
-  const feedMm = ((cfg.feed + cfg.topFeed) * cfg.lineSpacing) / 8;
-  const stats = { bytes: data.length, rows: canvas.height, mm: Math.round(canvas.height / 8 + feedMm), duty: blackRatio(canvas) };
+  const stats = statsOf(data, canvas, cfg);
   return { mode, lossy, cols: columns(cfg), canvas, bytes: () => data, stats };
 }
