@@ -6,6 +6,8 @@ import { TEMPLATES } from './templates.js';
 import { initSketch, blankSketch } from './sketch.js';
 import { Editor, STARTERS, drawRulers, FONT_NAMES, DPM } from './designer.js';
 import { parseSelfTest, inferConfig } from './detect.js';
+import { GALLERY, CATEGORIES, renderThumb } from './gallery.js';
+import { ICONS } from './icons.js';
 import {
   receiptBlocks, markupBlocks, codeBlocks, imageBlocks, testPageBlocks, unicodeTestBlocks, receiptNumber, text as textBlock,
 } from './doc.js';
@@ -63,6 +65,10 @@ function go(page) {
   $$('.page').forEach((p) => p.classList.toggle('on', p.id === 'page-' + page));
   $$('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   if (page === 'jobs') renderJobs();
+  if (page === 'print' && draft.kind === 'canvas' && !draft.design.objects.length && !draft.design.ink && !sessionStorage.getItem('ndShown')) {
+    try { sessionStorage.setItem('ndShown', '1'); } catch { /* ignore */ }
+    setTimeout(openNew, 200); // start with the size of the area, then a template
+  }
   window.scrollTo({ top: 0 });
 }
 $('#nav').onclick = (e) => { const b = e.target.closest('button'); if (b) go(b.dataset.page); };
@@ -376,7 +382,7 @@ let previewTimer, previewSeq = 0, lastComp = null;
 /** css px per printer dot for the chosen zoom (8 dots = 1 mm; 96 css dpi => 0.4724 px/dot at true size). */
 function viewScale(W, zoom) {
   const avail = Math.max(120, $('#stage').clientWidth - 44), mm = 96 / 25.4 / DPM;
-  return zoom === 'fit' ? Math.min(avail / W, 2.4) : zoom === 'actual' ? mm : Number(zoom) * mm;
+  return zoom === 'fit' || zoom === 'custom' ? Math.min(avail / W, 2.4) : zoom === 'actual' ? mm : Number(zoom) * mm;
 }
 
 function clearTelemetry() {
@@ -848,6 +854,7 @@ function ensureEditor() {
       selected: (o) => renderProps(o),
       active: () => draft.kind === 'canvas' && $('#page-print').classList.contains('on'),
       edit: () => $('#pText')?.focus(),
+      zoomed: (sc) => syncZoomUI(sc),
     },
   );
   editor.resetHistory();
@@ -879,7 +886,9 @@ $('#addBar').addEventListener('click', (e) => {
   if (tool) return setTool(editor.tool !== 'select' && editor.pen.eraser === (tool.dataset.tool === 'eraser') ? 'select' : tool.dataset.tool);
   if (!add) return;
   setTool('select');
-  if (add.dataset.add === 'image') $('#imgAdd').click(); else editor.add(add.dataset.add);
+  if (add.dataset.add === 'image') $('#imgAdd').click();
+  else if (add.dataset.add === 'icon') $('#iconDlg').showModal();
+  else editor.add(add.dataset.add);
 });
 $('#penRow').addEventListener('click', (e) => {
   const t = e.target.closest('[data-tool]');
@@ -906,7 +915,16 @@ $('#alignBar').addEventListener('click', (e) => {
   ({ front: () => editor.order('front'), back: () => editor.order('back'), dup: () => editor.duplicate(), del: () => editor.remove(), undo: () => editor.undo(), redo: () => editor.redo() })[b.dataset.act]?.();
 });
 $('#snapChk').onchange = (e) => { ensureEditor().snap = e.target.checked; };
-$('#zoomSel').onchange = (e) => { if (draft.kind === 'canvas') ensureEditor().setZoom(e.target.value); else schedulePreview(); };
+$('#zoomSel').onchange = (e) => { if (e.target.value === 'custom') return; if (draft.kind === 'canvas') ensureEditor().setZoom(e.target.value); else schedulePreview(); };
+const MMPX = 96 / 25.4 / DPM;
+function syncZoomUI(scale) {
+  const sel = $('#zoomSel');
+  if (editor.zoom === 'custom') { const o = sel.querySelector('option[value=custom]'); o.hidden = false; o.textContent = `${Math.round((scale / MMPX) * 100)}%`; sel.value = 'custom'; }
+  else sel.value = String(editor.zoom);
+}
+$('#zoomIn').onclick = () => ensureEditor().zoomBy(1.25);
+$('#zoomOut').onclick = () => ensureEditor().zoomBy(0.8);
+$('#zoomFit').onclick = () => { ensureEditor().fitView(); };
 $('#applyStarter').onclick = () => {
   ensureEditor();
   draft.design.objects = STARTERS[$('#starter').value].build(editor.size);
@@ -925,16 +943,17 @@ function renderProps(o) {
   const chk = (k, label, v) => `<label class="check"><input type="checkbox" data-p="${k}" ${v ? 'checked' : ''}> ${label}</label>`;
   const sel = (k, label, v, opts) => `<label class="f"><span>${label}</span><select data-p="${k}">${opts.map(([a, b]) => `<option value="${a}"${a === v ? ' selected' : ''}>${b}</option>`).join('')}</select></label>`;
   const txt = (k, label, v, area) => `<label class="f wide"><span>${label}</span>${area ? `<textarea id="pText" data-p="${k}" rows="3">${esc(v)}</textarea>` : `<input data-p="${k}" value="${esc(v)}">`}</label>`;
-  let h = `<h3>${{ text: 'Text', image: 'Image', qr: 'QR code', barcode: 'Barcode', rect: 'Box', ellipse: 'Circle', line: 'Line' }[o.t]}</h3><div class="fields">`;
-  if (o.t === 'text') h += txt('text', 'Text', o.text, true) + sel('font', 'Font', o.font, Object.entries(FONT_NAMES)) + rng('size', 'Size (dots)', o.size, 10, 140) + sel('align', 'Align', o.align, [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']]) + chk('bold', 'Bold', o.bold) + chk('italic', 'Italic', o.italic) + chk('inv', 'White on black', o.inv);
+  let h = `<h3>${{ text: 'Text', image: 'Image', qr: 'QR code', barcode: 'Barcode', rect: 'Box', ellipse: 'Circle', line: 'Line', icon: 'Icon' }[o.t]}</h3><div class="fields">`;
+  if (o.t === 'text') h += txt('text', 'Text', o.text, true) + sel('font', 'Font', o.font, Object.entries(FONT_NAMES)) + rng('size', 'Size (dots)', o.size, 10, 140) + sel('align', 'Align', o.align, [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']]) + chk('bold', 'Bold', o.bold) + chk('italic', 'Italic', o.italic) + chk('inv', 'White on black', o.inv) + rng('ls', 'Letter spacing', o.ls || 0, 0, 14);
   if (o.t === 'image')
     h += `<div class="wide chips"><button class="chip-btn" data-pa="r90-">⟲ Rotate 90°</button><button class="chip-btn" data-pa="r90+">⟳ Rotate 90°</button><button class="chip-btn" data-pa="flipH">⇋ Flip</button><button class="chip-btn" data-pa="flipV">⇅ Flip</button><button class="chip-btn" data-pa="fit">Fit width</button><button class="chip-btn" data-pa="swap">Replace…</button></div>`
       + sel('dither', 'Dithering', o.dither, [['atkinson', 'Atkinson (logos, crisp)'], ['floyd', 'Floyd–Steinberg (photos)'], ['bayer', 'Halftone'], ['threshold', 'Threshold (line art)']])
       + chk('auto', 'Auto-optimise (stretch tones)', o.auto) + rng('brightness', 'Brightness', o.brightness, -100, 100) + rng('contrast', 'Contrast', o.contrast, -100, 100) + chk('invert', 'Invert', o.invert);
+  if (o.t === 'icon') h += sel('icon', 'Icon', o.icon, Object.entries(ICONS).map(([k, v]) => [k, v.label]));
   if (o.t === 'qr') h += txt('data', 'Content', o.data) + sel('ec', 'Error correction', o.ec, [['L', 'L · 7%'], ['M', 'M · 15%'], ['Q', 'Q · 25%'], ['H', 'H · 30%']]);
   if (o.t === 'barcode') h += txt('data', 'Value', o.data) + sel('format', 'Format', o.format, [['CODE128', 'Code 128'], ['CODE39', 'Code 39'], ['EAN13', 'EAN-13'], ['UPC', 'UPC-A'], ['ITF', 'ITF']]) + chk('hri', 'Show text under bars', o.hri);
-  if (['rect', 'ellipse', 'line'].includes(o.t)) h += rng('lw', 'Line thickness', o.lw, 1, 16) + (o.t === 'line' ? chk('arrow', 'Arrow head', o.arrow) : chk('fill', 'Filled', o.fill));
-  h += '</div><h3>Position &amp; size (mm)</h3><div class="fields">' + num('x', 'X →', o.x, -50, 400) + num('y', 'Y ↓', o.y, -50, 600) + (o.t === 'text' ? '' : num('w', 'Width', o.w, 1, 400)) + (o.t === 'text' ? num('w', 'Box width', o.w, 3, 400) : o.t === 'qr' ? '' : num('h', 'Height', o.h, 0, 600)) + rng('rot', 'Rotation °', Math.round(o.rot), 0, 359) + '</div><div class="chips"><button class="chip-btn" data-pa="rot-">⟲ 90°</button><button class="chip-btn" data-pa="rot+">⟳ 90°</button></div>';
+  if (['rect', 'ellipse', 'line'].includes(o.t)) h += rng('lw', 'Line thickness', o.lw, 1, 16) + (o.t === 'line' ? chk('arrow', 'Arrow head', o.arrow) : chk('fill', 'Filled', o.fill)) + (o.t === 'rect' ? rng('r', 'Corner radius', o.r || 0, 0, 80) : '') + (o.t !== 'ellipse' ? chk('dash', 'Dashed', o.dash) : '');
+  h += '</div><h3>Position &amp; size (mm)</h3><div class="fields">' + num('x', 'X →', o.x, -50, 400) + num('y', 'Y ↓', o.y, -50, 600) + (o.t === 'text' ? '' : num('w', 'Width', o.w, 1, 400)) + (o.t === 'text' ? num('w', 'Box width', o.w, 3, 400) : ['qr', 'icon'].includes(o.t) ? '' : num('h', 'Height', o.h, 0, 600)) + rng('rot', 'Rotation °', Math.round(o.rot), 0, 359) + '</div><div class="chips"><button class="chip-btn" data-pa="rot-">⟲ 90°</button><button class="chip-btn" data-pa="rot+">⟳ 90°</button></div>';
   box.innerHTML = h;
 }
 
@@ -957,6 +976,99 @@ $('#props').addEventListener('click', (e) => {
   commitProps();
 });
 function commitProps() { renderProps(editor.sel); editor.commit(); }
+
+// ================================================================ new design: size first, then template
+
+const nd = { type: 'label', L: 50, H: 25, roll: 60, cat: 'All' };
+let ndToken = 0, ndTimer;
+const ndSize = () => {
+  const head = headDots(settings);
+  return nd.type === 'label' ? { W: Math.min(head, Math.round(nd.L * 8)), H: Math.round(nd.H * 8) } : { W: head, H: Math.round(nd.roll * 8) };
+};
+
+function openNew() {
+  Object.assign(nd, { type: settings.paper.type, L: settings.paper.labelW, H: settings.paper.labelH, roll: draft.design.heightMm || 60 });
+  syncNd();
+  $('#newDlg').showModal();
+}
+
+function syncNd() {
+  $$('#ndType button').forEach((b) => b.classList.toggle('on', b.dataset.t === nd.type));
+  $('#ndLabel').hidden = nd.type !== 'label'; $('#ndRoll').hidden = nd.type !== 'roll';
+  $('#ndL').value = nd.L; $('#ndH').value = nd.H; $('#ndR').value = nd.roll;
+  $$('#ndChips button').forEach((b) => b.classList.toggle('on', +b.dataset.l === nd.L && +b.dataset.h === nd.H));
+  $$('#ndCats button').forEach((b) => b.classList.toggle('on', b.dataset.c === nd.cat));
+  const sz = ndSize(), k = Math.min(200 / sz.W, 90 / sz.H);
+  const r = $('#ndRect');
+  r.style.width = Math.max(10, Math.round(sz.W * k)) + 'px'; r.style.height = Math.max(8, Math.round(sz.H * k)) + 'px';
+  const headMm = headDots(settings) / 8;
+  $('#ndSizeText').textContent = `${sz.W / 8} × ${sz.H / 8} mm · ${sz.W} × ${sz.H} dots` + (nd.type === 'label' && nd.L > headMm ? ` — your head prints ${headMm} mm across` : '');
+  clearTimeout(ndTimer); ndTimer = setTimeout(renderGallery, 180);
+}
+
+async function renderGallery() {
+  const tok = ++ndToken, size = ndSize(), grid = $('#ndGallery');
+  if (size.W < 40 || size.H < 24) { grid.innerHTML = '<p class="hint">Enter a size to see templates.</p>'; return; }
+  grid.innerHTML = '';
+  const cards = GALLERY.filter((g) => nd.cat === 'All' || g.cat === nd.cat).map((g) => {
+    const b = document.createElement('button');
+    b.className = 'gal'; b.dataset.id = g.id;
+    b.innerHTML = `<div class="thumb"></div><b>${esc(g.name)}</b>`;
+    grid.append(b);
+    return [g, b];
+  });
+  for (const [g, b] of cards) {
+    if (tok !== ndToken) return;
+    try { const c = await renderThumb(g, size); if (tok !== ndToken) return; b.querySelector('.thumb').append(c); }
+    catch { b.querySelector('.thumb').textContent = '—'; }
+  }
+}
+
+function applyNew(tpl) {
+  ensureEditor();
+  if (nd.type !== settings.paper.type) setPaperType(nd.type);
+  if (nd.type === 'label') { settings.paper.labelW = nd.L; settings.paper.labelH = nd.H; } else draft.design.heightMm = nd.roll;
+  fillAll(); onSettingChanged('paper.labelW');
+  draft.design.objects = tpl ? tpl.build(designSize(draft.design, cfg)) : [];
+  draft.design.ink = null; editor.ink = null;
+  editor.select(null); editor.resetHistory();
+  settings.setupDone = true;
+  if (settings.printType === 'receipt') settings.printType = 'canvas';
+  saveSettings(settings); refreshDerived();
+  setKind('canvas'); persistDraft();
+  $('#newDlg').close(); go('print');
+  editor.redraw();
+  toast(tpl ? `“${tpl.name}” applied — tap anything to edit it` : 'Blank canvas ready');
+}
+
+$('#ndChips').innerHTML = LABEL_PRESETS.map(([l, h]) => `<button class="chip-btn" data-l="${l}" data-h="${h}">${l} × ${h} mm</button>`).join('');
+$('#ndCats').innerHTML = ['All', ...CATEGORIES].map((c) => `<button class="chip-btn" data-c="${esc(c)}">${esc(c)}</button>`).join('');
+$('#ndType').onclick = (e) => { const b = e.target.closest('[data-t]'); if (b) { nd.type = b.dataset.t; syncNd(); } };
+$('#ndChips').onclick = (e) => { const b = e.target.closest('[data-l]'); if (b) { nd.type = 'label'; nd.L = +b.dataset.l; nd.H = +b.dataset.h; syncNd(); } };
+$('#ndCats').onclick = (e) => { const b = e.target.closest('[data-c]'); if (b) { nd.cat = b.dataset.c; syncNd(); } };
+for (const [id, key] of [['ndL', 'L'], ['ndH', 'H'], ['ndR', 'roll']]) {
+  $('#' + id).oninput = (e) => {
+    nd[key] = Math.max(1, Number(e.target.value) || 1);
+    const typed = e.target.value;
+    syncNd();
+    e.target.value = typed; // keep what the user is typing
+  };
+}
+$('#ndSwap').onclick = () => { [nd.L, nd.H] = [nd.H, nd.L]; syncNd(); };
+$('#ndGallery').onclick = (e) => { const b = e.target.closest('.gal'); if (b) applyNew(GALLERY.find((g) => g.id === b.dataset.id)); };
+$('#ndBlank').onclick = () => applyNew(null);
+$('#newClose').onclick = () => $('#newDlg').close();
+$('#newDesignBtn').onclick = openNew;
+
+// ----- icon picker
+$('#iconGrid').innerHTML = Object.entries(ICONS).map(([k, v]) => `<button data-i="${k}" title="${esc(v.label)}"><svg viewBox="0 0 24 24"><path d="${v.d}"/></svg>${esc(v.label)}</button>`).join('');
+$('#iconGrid').onclick = (e) => {
+  const b = e.target.closest('[data-i]');
+  if (!b) return;
+  ensureEditor(); setTool('select'); editor.add('icon', { icon: b.dataset.i });
+  $('#iconDlg').close();
+};
+$('#iconClose').onclick = () => $('#iconDlg').close();
 
 // ================================================================ setup wizard (steps 1 and 2)
 

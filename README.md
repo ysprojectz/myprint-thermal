@@ -56,6 +56,14 @@ Other ways in, all on the same tab: **USB** (WebUSB), **USB serial**, **Bluetoot
 - Auto-reconnect after a dropped Bluetooth link, adaptive chunk size when the printer rejects large writes
 - Settings export / import, light / dark theme, installable
 
+## Canva-style designing (new)
+
+**New design** opens a two-step screen: first the **size of your area** (label length × height, or a roll length — with a live proportional preview), then a **template gallery** whose previews are drawn at *your* size. Twenty-eight original templates in seven categories (Retail, Shipping, Name & badge, Home & kitchen, QR & contact, Gift & paper, Office) lay themselves out for any size — text shrinks to fit, content centres — so the same design works on a 25 × 50 mm sticker and on a roll. Or start blank.
+
+The canvas then works like a design tool: **zoom** with the − / + buttons, Ctrl + scroll or a two-finger pinch; **pan** by dragging empty space; add text (7 fonts incl. heavy, rounded, script, narrow; letter spacing), images, **icons** (22 built-in vector icons), QR codes, barcodes, lines, boxes with rounded corners and dashed borders, circles and pen drawing.
+
+> The templates are original designs in common label styles. I did not copy artwork from other apps — it is copyrighted — so if you want a specific look, describe it and I will add it.
+
 ## MyPrint 2.0 — guided flow
 
 **Setup** (two steps) → **Design** → **Jobs**.
@@ -101,6 +109,8 @@ js/engine.js            blocks -> preview canvas + bytes, native/graphic mode ch
 js/escpos.js            ESC/POS command builder, codepages, native layout (pure JS)
 js/render.js            canvas renderer, dithering, QR / barcode drawing, bit packing
 js/doc.js               receipt / text / QR / test-page block builders
+js/gallery.js           28 adaptive label/tag templates
+js/icons.js             built-in vector icons
 js/designer.js          interactive canvas editor (objects, rulers, snapping, pen layer)
 js/detect.js            printer identification + automatic configuration
 js/templates.js         the nine Studio templates (form schema + block builders)
@@ -111,7 +121,7 @@ js/vendor/              qrcode-generator 1.4.4, JsBarcode 3.11.6 (MIT, bundled s
 sw.js, manifest.webmanifest, icons/
 ```
 
-After changing any file, bump `CACHE` in `sw.js` (currently `myprint-v3`) so installed copies pick up the update.
+After changing any file, bump `CACHE` in `sw.js` (currently `myprint-v4`) so installed copies pick up the update.
 
 ## Status of testing
 

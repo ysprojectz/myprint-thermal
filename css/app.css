@@ -315,3 +315,24 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
   .stage { max-height: 46vh; }
   .preview .tele, .preview .tools, .preview .banner { font-size: 12px; }
 }
+
+/* ---------- new design dialog, gallery, icons, zoom */
+.dlg.wide { max-height: 86vh; overflow: auto; }
+dialog:has(.dlg.wide) { width: min(900px, 96vw); }
+.nd-step { display: flex; gap: 10px; align-items: center; margin: 16px 0 8px; }
+.nd-step:first-of-type { margin-top: 4px; }
+.nd-size { display: flex; align-items: center; gap: 14px; margin-top: 12px; min-height: 64px; }
+.nd-rect { background: #fff; border: 2px solid var(--accent); border-radius: 4px; flex: none; box-shadow: var(--shadow); }
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 6px; }
+.gal { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 8px; cursor: pointer; text-align: left; font: inherit; color: var(--ink); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.gal:hover { border-color: var(--accent); box-shadow: var(--shadow); }
+.gal .thumb { background: #fff; border-radius: 6px; min-height: 70px; display: grid; place-items: center; overflow: hidden; }
+.gal .thumb canvas { display: block; max-width: 100%; height: auto; max-height: 150px; width: auto; }
+.gal b { font-size: 12.5px; }
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+.icon-grid button { border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 10px 4px; cursor: pointer; color: var(--ink); font: inherit; font-size: 10px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.icon-grid button:hover { border-color: var(--accent); }
+.icon-grid svg { width: 30px; height: 30px; fill: currentColor; }
+.zoombar { display: inline-flex; align-items: center; gap: 4px; }
+.zoombar select { width: auto; padding: 6px 8px; font-size: 13px; }
+.row-actions.start { margin: 0 0 12px; }

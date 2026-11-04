@@ -2,14 +2,19 @@
 // resolution (8 dots = 1 mm). The same paint code feeds the on-screen editor and the printed bitmap, so what you
 // see is exactly what prints.
 import { newCanvas, ctx2d, loadImage, bwFromCanvas, qrBitmap, barcodeBitmap, binarize } from './render.js';
+import { iconPath } from './icons.js';
 
 export const DPM = 8; // dots per millimetre at 203 dpi
 const FONTS = {
   sans: '"Segoe UI","Helvetica Neue",Arial,"Noto Sans","Noto Sans Tamil","Noto Sans Devanagari","Nirmala UI",sans-serif',
   mono: '"SF Mono",Menlo,Consolas,"Courier New",monospace',
   serif: 'Georgia,"Times New Roman","Noto Serif",serif',
+  display: '"Arial Black","Impact","Helvetica Neue",Arial,sans-serif',
+  round: '"Arial Rounded MT Bold","Varela Round","Nunito","Trebuchet MS",sans-serif',
+  script: '"Brush Script MT","Segoe Script","Snell Roundhand","Lucida Handwriting",cursive',
+  narrow: '"Arial Narrow","Roboto Condensed","Helvetica Neue Condensed",Arial,sans-serif',
 };
-export const FONT_NAMES = { sans: 'Sans', mono: 'Mono', serif: 'Serif' };
+export const FONT_NAMES = { sans: 'Sans', display: 'Heavy', round: 'Rounded', narrow: 'Narrow', serif: 'Serif', script: 'Script', mono: 'Mono' };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const rad = (d) => (d * Math.PI) / 180;
 let counter = 0;
@@ -24,13 +29,14 @@ export function newObject(type, size, extra = {}) {
   const base = { id: nid(), t: type, x: 0, y: 0, w: 100, h: 60, rot: 0 };
   const side = Math.round(Math.min(W, H) * 0.5 / 8) * 8;
   const defs = {
-    text: { w: Math.round(W * 0.7), h: 40, text: 'Text', size: Math.round(clamp(H * 0.14, 24, 40)), bold: true, italic: false, font: 'sans', align: 'left', inv: false },
+    text: { w: Math.round(W * 0.7), h: 40, text: 'Text', size: Math.round(clamp(H * 0.14, 24, 40)), bold: true, italic: false, font: 'sans', align: 'left', inv: false, ls: 0 },
+    icon: { w: Math.round(side * 0.7), h: Math.round(side * 0.7), icon: 'star' },
     image: { w: Math.round(W * 0.5), h: Math.round(W * 0.5), src: null, r90: 0, flipH: false, flipV: false, dither: 'atkinson', brightness: 0, contrast: 0, invert: false, auto: true },
     qr: { w: side, h: side, data: 'https://example.com', ec: 'M' },
     barcode: { w: Math.round(W * 0.8), h: Math.round(clamp(H * 0.3, 56, 110)), data: '123456789012', format: 'CODE128', hri: true },
-    rect: { w: Math.round(W * 0.6), h: Math.round(Math.min(H * 0.4, W * 0.4)), lw: 3, fill: false },
+    rect: { w: Math.round(W * 0.6), h: Math.round(Math.min(H * 0.4, W * 0.4)), lw: 3, fill: false, r: 0, dash: false },
     ellipse: { w: Math.round(W * 0.5), h: Math.round(Math.min(H * 0.4, W * 0.4)), lw: 3, fill: false },
-    line: { w: Math.round(W * 0.7), h: 0, lw: 3, arrow: false },
+    line: { w: Math.round(W * 0.7), h: 0, lw: 3, arrow: false, dash: false },
   };
   const o = { ...base, ...defs[type], ...extra };
   if (extra.x === undefined) o.x = Math.round((W - o.w) / 2);
@@ -85,7 +91,7 @@ export const STARTERS = {
 // ---------------------------------------------------------------- text layout & painting
 
 const scratch = ctx2d(newCanvas(8, 8));
-const fontStr = (o) => `${o.italic ? 'italic ' : ''}${o.bold ? 700 : 400} ${o.size}px ${FONTS[o.font] || FONTS.sans}`;
+export const fontStr = (o) => `${o.italic ? 'italic ' : ''}${o.bold ? 700 : 400} ${o.size}px ${FONTS[o.font] || FONTS.sans}`;
 
 function wrapLines(ctx, text, maxW) {
   const out = [];
@@ -112,7 +118,7 @@ function wrapLines(ctx, text, maxW) {
 export function measureTexts(design) {
   for (const o of design.objects) {
     if (o.t !== 'text') continue;
-    scratch.font = fontStr(o);
+    scratch.font = fontStr(o); scratch.letterSpacing = `${o.ls || 0}px`;
     o._lines = wrapLines(scratch, o.text, o.w - 8);
     o.h = Math.max(8, Math.round(o._lines.length * o.size * 1.2) + 4);
   }
@@ -170,7 +176,7 @@ function paintObject(ctx, o) {
     case 'text': {
       if (o.inv) ctx.fillRect(0, 0, o.w, o.h);
       ctx.fillStyle = o.inv ? '#fff' : '#000';
-      ctx.font = fontStr(o); ctx.textBaseline = 'top';
+      ctx.font = fontStr(o); ctx.textBaseline = 'top'; ctx.letterSpacing = `${o.ls || 0}px`;
       const lh = o.size * 1.2;
       (o._lines || []).forEach((l, i) => {
         const w = ctx.measureText(l).width;
@@ -183,14 +189,23 @@ function paintObject(ctx, o) {
       if (bmp?.error) { ctx.lineWidth = 2; ctx.strokeRect(1, 1, o.w - 2, o.h - 2); ctx.font = '14px sans-serif'; ctx.textBaseline = 'top'; ctx.fillText(bmp.error, 6, 6); }
       else if (bmp) ctx.drawImage(bmp, 0, 0, o.w, o.h);
       break;
-    case 'rect': ctx.lineWidth = o.lw; o.fill ? ctx.fillRect(0, 0, o.w, o.h) : ctx.strokeRect(o.lw / 2, o.lw / 2, o.w - o.lw, o.h - o.lw); break;
+    case 'icon': ctx.scale(o.w / 24, o.h / 24); ctx.fill(iconPath(o.icon)); break;
+    case 'rect': {
+      ctx.lineWidth = o.lw; ctx.setLineDash(o.dash ? [o.lw * 3, o.lw * 2] : []);
+      const x = o.fill ? 0 : o.lw / 2, y = o.fill ? 0 : o.lw / 2, w = o.fill ? o.w : o.w - o.lw, h = o.fill ? o.h : o.h - o.lw;
+      ctx.beginPath();
+      if (ctx.roundRect && o.r > 0) ctx.roundRect(x, y, w, h, Math.min(o.r, w / 2, h / 2)); else ctx.rect(x, y, w, h);
+      o.fill ? ctx.fill() : ctx.stroke();
+      ctx.setLineDash([]);
+      break;
+    }
     case 'ellipse':
       ctx.lineWidth = o.lw; ctx.beginPath();
       ctx.ellipse(o.w / 2, o.h / 2, Math.max(1, o.w / 2 - o.lw / 2), Math.max(1, o.h / 2 - o.lw / 2), 0, 0, Math.PI * 2);
       o.fill ? ctx.fill() : ctx.stroke(); break;
     case 'line': {
-      ctx.lineWidth = o.lw; ctx.lineCap = 'butt';
-      ctx.beginPath(); ctx.moveTo(0, o.h / 2); ctx.lineTo(o.w, o.h / 2); ctx.stroke();
+      ctx.lineWidth = o.lw; ctx.lineCap = 'butt'; ctx.setLineDash(o.dash ? [o.lw * 3, o.lw * 2] : []);
+      ctx.beginPath(); ctx.moveTo(0, o.h / 2); ctx.lineTo(o.w, o.h / 2); ctx.stroke(); ctx.setLineDash([]);
       if (o.arrow) { const a = o.lw * 4; ctx.beginPath(); ctx.moveTo(o.w, o.h / 2); ctx.lineTo(o.w - a, o.h / 2 - a / 1.6); ctx.lineTo(o.w - a, o.h / 2 + a / 1.6); ctx.closePath(); ctx.fill(); }
       break;
     }
@@ -302,6 +317,8 @@ export class Editor {
     o.onpointerup = o.onpointercancel = (e) => this.up(e);
     o.onpointerleave = () => { this.cursor = null; this.drawRulers(); };
     o.ondblclick = () => { if (this.sel?.t === 'text') this.h.edit?.(); };
+    this.ptrs = new Map();
+    o.addEventListener('wheel', (e) => { if (e.ctrlKey || e.metaKey || e.altKey) { e.preventDefault(); this.zoomBy(Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY); } }, { passive: false });
     this.keyHandler = (e) => this.key(e);
     document.addEventListener('keydown', this.keyHandler);
     this.ro = new ResizeObserver(() => { if (this.zoom === 'fit') this.redraw(); });
@@ -315,11 +332,29 @@ export class Editor {
   // ----- view
   setZoom(z) { this.zoom = z; this.redraw(); }
   computeScale() {
-    const { W } = this.size, avail = Math.max(120, this.ui.stage.clientWidth - 40);
+    const { W } = this.size, avail = Math.max(120, this.ui.stage.clientWidth - 44);
     const mm = 96 / 25.4 / DPM; // css px per dot at true physical size
-    const s = this.zoom === 'fit' ? Math.min(avail / W, 2.4) : this.zoom === 'actual' ? mm : Number(this.zoom) * mm;
-    this.scale = s;
-    return s;
+    this.scale = this.zoom === 'custom' ? this.zf : this.zoom === 'fit' ? Math.min(avail / W, 2.4) : this.zoom === 'actual' ? mm : Number(this.zoom) * mm;
+    return this.scale;
+  }
+  /** Zoom around a screen point (wheel / pinch / buttons). factor > 1 zooms in. */
+  zoomBy(f, cx, cy) {
+    const ov = this.ui.overlay, r = ov.getBoundingClientRect(), old = this.scale, ns = clamp(old * f, 0.25, 8);
+    if (ns === old) return;
+    const ax = cx ?? r.left + r.width / 2, ay = cy ?? r.top + r.height / 2;
+    const dx = (ax - r.left) / old, dy = (ay - r.top) / old;
+    this.zoom = 'custom'; this.zf = ns; this.relayout();
+    const r2 = ov.getBoundingClientRect();
+    this.ui.stage.scrollLeft += r2.left + dx * ns - ax; this.ui.stage.scrollTop += r2.top + dy * ns - ay;
+  }
+  fitView() { this.zoom = 'fit'; this.relayout(); }
+  /** Synchronous part of a redraw: sizes only (zoom never needs to repaint the pixels). */
+  relayout() {
+    const { W, H } = this.size, s = this.computeScale(), { display, overlay } = this.ui;
+    display.style.width = Math.round(W * s) + 'px'; display.style.height = Math.round(H * s) + 'px';
+    overlay.width = Math.round(W * s); overlay.height = Math.round(H * s);
+    overlay.style.width = overlay.width + 'px'; overlay.style.height = overlay.height + 'px';
+    this.drawOverlay(); this.drawRulers(); this.h.zoomed?.(s);
   }
   async syncInk() {
     const { W, H } = this.size, d = this.design;
@@ -332,18 +367,15 @@ export class Editor {
   }
 
   async redraw() {
-    const { W, H } = this.size, s = this.computeScale(), { display, overlay } = this.ui;
+    const { W, H } = this.size, { display } = this.ui;
     const token = (this.token = (this.token || 0) + 1);
     await this.syncInk();
     await prepare(this.design);
     if (token !== this.token) return;
     display.width = W; display.height = H;
-    display.style.width = Math.round(W * s) + 'px'; display.style.height = Math.round(H * s) + 'px';
     paintDesign(ctx2d(display), this.design, this.size, this.ink);
     binarize(display, 140);
-    overlay.width = Math.round(W * s); overlay.height = Math.round(H * s);
-    overlay.style.width = overlay.width + 'px'; overlay.style.height = overlay.height + 'px';
-    this.drawOverlay(); this.drawRulers();
+    this.relayout();
   }
 
   /** Cheap repaint while dragging (objects only; caches are warm). */
@@ -409,7 +441,7 @@ export class Editor {
   update(patch, quick = false) {
     if (!this.sel) return;
     Object.assign(this.sel, patch);
-    if (this.sel.t === 'qr') this.sel.h = this.sel.w;
+    if (this.sel.t === 'qr' || this.sel.t === 'icon') this.sel.h = this.sel.w;
     this.h.changed?.();
     quick ? this.quick() : this.redraw();
   }
@@ -473,6 +505,12 @@ export class Editor {
   down(e) {
     const p = this.pt(e);
     this.ui.overlay.setPointerCapture(e.pointerId);
+    this.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.ptrs.size === 2) { // two fingers: pinch-zoom
+      const [a, b] = [...this.ptrs.values()];
+      this.drag = { mode: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y), s0: this.scale };
+      return;
+    }
     if (this.tool !== 'select') { this.drag = { mode: 'ink', last: p }; this.stroke(p, p); return; }
     const el = this.sel, tol = 10 / this.scale;
     if (el) {
@@ -485,12 +523,21 @@ export class Editor {
     const h = this.hit(p);
     this.select(h);
     if (h) this.drag = { mode: 'move', dx: p.x - h.x, dy: p.y - h.y, moved: false };
+    else this.drag = { mode: 'pan', x: e.clientX, y: e.clientY, sl: this.ui.stage.scrollLeft, st: this.ui.stage.scrollTop }; // empty space: pan
   }
   move(e) {
     const p = this.pt(e);
     this.cursor = p; this.drawRulers();
+    if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const d = this.drag, el = this.sel;
     if (!d) return;
+    if (d.mode === 'pinch') {
+      if (this.ptrs.size < 2) return;
+      const [a, b] = [...this.ptrs.values()], dist = Math.hypot(a.x - b.x, a.y - b.y);
+      this.zoomBy((d.s0 * dist / d.d0) / this.scale, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      return;
+    }
+    if (d.mode === 'pan') { this.ui.stage.scrollLeft = d.sl - (e.clientX - d.x); this.ui.stage.scrollTop = d.st - (e.clientY - d.y); return; }
     if (d.mode === 'ink') { this.stroke(d.last, p); d.last = p; return; }
     if (!el) return;
     if (d.mode === 'move') {
@@ -517,7 +564,7 @@ export class Editor {
       const rel = (q) => ({ x: (q.x - c.x) * Math.cos(ang) - (q.y - c.y) * Math.sin(ang), y: (q.x - c.x) * Math.sin(ang) + (q.y - c.y) * Math.cos(ang) });
       const la = rel(a); let lp = rel(p);
       let w = Math.max(8, Math.abs(lp.x - la.x)), h = Math.max(8, Math.abs(lp.y - la.y));
-      if (el.t === 'qr') w = h = Math.max(w, h); // QR stays square
+      if (el.t === 'qr' || el.t === 'icon') w = h = Math.max(w, h); // QR codes and icons stay square
       else if (el.t === 'image' || e.shiftKey) { const k = Math.max(w / d.aspect, h); h = k; w = k * d.aspect; } // keep aspect
       if (el.t === 'line') h = Math.max(0, h);
       const sx = lp.x >= la.x ? 1 : -1, sy = lp.y >= la.y ? 1 : -1;
@@ -531,8 +578,10 @@ export class Editor {
   }
   up(e) {
     const d = this.drag;
+    this.ptrs.delete(e.pointerId);
+    if (d?.mode === 'pinch') { if (this.ptrs.size < 2) this.drag = null; return; }
     this.drag = null; this.guides = [];
-    if (!d) return;
+    if (!d || d.mode === 'pan') return;
     if (d.mode === 'ink') { this.design.ink = this.ink.toDataURL('image/png'); this.h.changed?.(); return; }
     this.h.selected?.(this.sel);
     this.commit(); this.redraw();

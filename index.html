@@ -52,9 +52,13 @@
 
       <!-- Canvas -->
       <div class="card kind on" data-kind="canvas">
+        <div class="row-actions start">
+          <button class="btn primary" id="newDesignBtn">＋ New design — size &amp; templates</button>
+        </div>
         <div class="tool-row" id="addBar">
           <button class="tbtn" data-add="text"><b>T</b>Text</button>
           <button class="tbtn" data-add="image"><b>▣</b>Image</button>
+          <button class="tbtn" data-add="icon"><b>★</b>Icon</button>
           <button class="tbtn" data-add="qr"><b>▦</b>QR</button>
           <button class="tbtn" data-add="barcode"><b>|||</b>Barcode</button>
           <button class="tbtn" data-add="line"><b>—</b>Line</button>
@@ -202,7 +206,9 @@
         <div class="banner warn" id="heatWarn" hidden><b>High head load (&gt;35% black).</b> Solid areas can stall or overheat a battery printer — use Atkinson dithering or raise the delay between chunks (Printer → Transfer speed).</div>
         <div class="banner bad" id="labelWarn" hidden></div>
         <div class="stage-bar">
-          <label class="f inline"><span>Zoom</span><select id="zoomSel"><option value="fit">Fit</option><option value="actual">Actual size (1:1 mm)</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
+          <span class="zoombar"><button class="tbtn s" id="zoomOut" title="Zoom out">−</button>
+            <select id="zoomSel" aria-label="Zoom"><option value="fit">Fit</option><option value="actual">Actual size (1:1 mm)</option><option value="1.5">150%</option><option value="2">200%</option><option value="custom" hidden>Custom</option></select>
+            <button class="tbtn s" id="zoomIn" title="Zoom in">+</button><button class="tbtn s" id="zoomFit" title="Fit to screen">⤢</button></span>
           <label class="check"><input type="checkbox" id="snapChk" checked> Snap</label>
           <span class="muted" id="paperInfo"></span>
         </div>
@@ -437,6 +443,38 @@
       <button class="btn" id="hexCopy">Copy Uint8Array</button>
       <button class="btn primary" id="hexClose">Close</button>
     </div>
+  </div>
+</dialog>
+
+<dialog id="newDlg">
+  <div class="dlg wide">
+    <div class="head-row"><h2>New design</h2><button class="btn ghost" id="newClose" aria-label="Close">✕</button></div>
+    <div class="nd-step"><span class="num">1</span><b>Choose the size of your area</b></div>
+    <div class="seg" id="ndType"><button data-t="label">Label / sticker</button><button data-t="roll">Roll (continuous)</button></div>
+    <div id="ndLabel">
+      <div class="chips" id="ndChips"></div>
+      <div class="fields">
+        <label class="f"><span>Length (mm) — across</span><input type="number" id="ndL" min="10" max="200" inputmode="numeric"></label>
+        <label class="f"><span>Height (mm) — along feed</span><input type="number" id="ndH" min="8" max="300" inputmode="numeric"></label>
+      </div>
+      <div class="row-actions"><button class="btn ghost" id="ndSwap">⇄ Swap length / height</button></div>
+    </div>
+    <div id="ndRoll" hidden>
+      <div class="fields"><label class="f"><span>Roll length to design (mm)</span><input type="number" id="ndR" min="20" max="600" inputmode="numeric"></label></div>
+      <p class="hint">The width is your printer head. Empty paper at the bottom is trimmed when you print.</p>
+    </div>
+    <div class="nd-size"><div class="nd-rect" id="ndRect"></div><span id="ndSizeText" class="muted"></span></div>
+    <div class="nd-step"><span class="num">2</span><b>Pick a template or start blank</b></div>
+    <div class="chips" id="ndCats"></div>
+    <div class="gallery" id="ndGallery"></div>
+    <div class="row-actions"><button class="btn primary" id="ndBlank">Start with a blank canvas</button></div>
+  </div>
+</dialog>
+
+<dialog id="iconDlg">
+  <div class="dlg">
+    <div class="head-row"><h2>Icons</h2><button class="btn ghost" id="iconClose" aria-label="Close">✕</button></div>
+    <div class="icon-grid" id="iconGrid"></div>
   </div>
 </dialog>
 
