@@ -56,6 +56,20 @@ Other ways in, all on the same tab: **USB** (WebUSB), **USB serial**, **Bluetoot
 - Auto-reconnect after a dropped Bluetooth link, adaptive chunk size when the printer rejects large writes
 - Settings export / import, light / dark theme, installable
 
+## Studio templates (new)
+
+The **Studio** tab on the Print page has nine ready-made slips, ported from the Thermal Print Studio you shared and rebuilt on this app's offline engine:
+Daily To-Do · Pocket Digest (article + QR) · Vacation & Trip · Home Labels (pantry / cable / box / 50×25 mm spec sticker with barcode) · Mini Photo (clipart or your own photo, 1-bit dithering, Polaroid frame) · Mini Doc Print (boxed notes) · Smart QR Hub (Wi-Fi, vCard, link, luggage tag) · Doodle & Memo (finger / pen sketch pad) · Test & Bookmark (printer spec sheet + ruler, ex-libris slip).
+Each template can be saved / loaded as a JSON preset, archived in History without printing, and re-opened for editing from the Jobs tab.
+
+**Paper & label formats:** 58 mm roll (your printer), **50 × 25 mm label (length 50, height 25)**, a **custom label size (width × height in mm)**, 80 / 76 / 50 / 38 mm rolls, die-cut and black-mark media, label-height guide with an overflow warning, line spacing (`ESC 3`), top / tear feed, a 1000-label roll counter and a “Calibrate gap” button (`GS FF`). A 58 mm head prints at most 48 mm (384 dots), so a 50 mm-wide label prints 48 mm across.
+
+**Telemetry under the preview:** payload size, estimated paper length and head duty (share of black dots; warns above 35%).
+**Other tools:** Save PNG, OS print, hex-bytes viewer, hardware macros (feed / beep / cut / reset), darkness presets (Eco 25 / Standard 38 / Dark 45), raster QR/barcode option, “keep text native” (₹ → Rs.) option.
+
+> **Unverified on real hardware:** the beep byte (`0x1E`), the label-gap advance (`FF` / `GS FF`) and the `ESC 7` darkness command are taken from the Studio file / common practice and may be ignored or behave differently on your model. The codepage is selected with `ESC t 2` (PC850 in Epson numbering); the Studio file used `ESC t 3`, which is PC860 — switch the codepage in settings if accented letters look wrong.
+> Raster images are now sent in **24-row bands** (1,152 bytes on 58 mm) so a ~4 KB printer buffer cannot overflow; change it under *Text & quality → Raster band height*.
+
 ## If something looks wrong
 
 | Symptom | Fix |
@@ -77,13 +91,15 @@ js/engine.js            blocks -> preview canvas + bytes, native/graphic mode ch
 js/escpos.js            ESC/POS command builder, codepages, native layout (pure JS)
 js/render.js            canvas renderer, dithering, QR / barcode drawing, bit packing
 js/doc.js               receipt / text / QR / test-page block builders
+js/templates.js         the nine Studio templates (form schema + block builders)
+js/clipart.js, sketch.js  clipart gallery and doodle pad
 js/printer.js           BLE, USB, Serial, SPP and virtual transports
 js/store.js             settings (localStorage) + jobs/templates (IndexedDB)
 js/vendor/              qrcode-generator 1.4.4, JsBarcode 3.11.6 (MIT, bundled so it works offline)
 sw.js, manifest.webmanifest, icons/
 ```
 
-After changing any file, bump `CACHE` in `sw.js` (`myprint-v1` → `myprint-v2`) so installed copies pick up the update.
+After changing any file, bump `CACHE` in `sw.js` (currently `myprint-v2`) so installed copies pick up the update.
 
 ## Status of testing
 

@@ -1,7 +1,16 @@
+import { defaultStudioData } from './templates.js';
+
 // Persistence: settings in localStorage, print jobs + templates in IndexedDB (works offline).
 
 export const DEFAULT_SETTINGS = {
-  paper: { preset: '58', dots: 384, margin: 0 },
+  ver: 2,
+  // media: continuous | diecut | blackmark; labelW/labelH are the label size in mm (used by the label presets)
+  paper: { preset: '58', dots: 384, margin: 0, media: 'continuous', labelW: 50, labelH: 0, lineSpacing: 30, topFeed: 0 },
+  tint: 'white',
+  buzzer: false, // beep after each print (0x1E, model specific)
+  translit: false, // native text: replace symbols the codepage lacks (₹ -> Rs.) instead of switching to graphic mode
+  qrEngine: 'native', // native GS ( k / GS k  |  raster bitmap
+  roll: { size: 1000, remaining: 1000 }, // die-cut label roll counter
   font: 'A', // native font A (12x24) / B (9x17)
   mode: 'auto', // auto | native | raster
   codepage: 'PC850',
@@ -11,7 +20,7 @@ export const DEFAULT_SETTINGS = {
   densityOn: false,
   density: 50,
   imageCmd: 'gsv0', // gsv0 | escstar
-  strip: 96,
+  strip: 24, // rows per GS v 0 band: 24 rows = 1,152 bytes on 58 mm, safe for ~4 KB printer buffers
   threshold: 140,
   raster: { font: 'sans', size: 22, lineGap: 1.25 },
   link: { profile: 'balanced', chunk: 100, delay: 12, ack: false, baud: 115200 },
@@ -36,6 +45,7 @@ export const DEFAULT_DRAFT = {
   text: { body: '# Hello\n---\nLeft | Right\n>> Right aligned\n<> Centered\n[qr:https://example.com]', align: 'left', size: 1, bold: false, markup: true },
   code: { type: 'qr', data: 'https://example.com', size: 6, ec: 'M', format: 'CODE128', height: 60, width: 2, hri: true, caption: '', align: 'center' },
   image: { src: null, name: '', scale: 100, dither: 'atkinson', brightness: 0, contrast: 0, align: 'center' },
+  studio: { tpl: 'todo', data: defaultStudioData() },
   raw: { hex: '1B 40 "Hello from MyPrint" 0A 0A 0A' },
   copies: 1,
 };
@@ -57,7 +67,13 @@ function saveJSON(key, v) {
   try { localStorage.setItem(key, JSON.stringify(v)); return true; } catch { return false; }
 }
 
-export const loadSettings = () => loadJSON('myprint.settings', DEFAULT_SETTINGS);
+export function loadSettings() {
+  const s = loadJSON('myprint.settings', DEFAULT_SETTINGS);
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('myprint.settings')); } catch { /* ignore */ }
+  if (saved && (saved.ver || 1) < 2) { s.strip = 24; s.ver = 2; } // v2: safer raster band height
+  return s;
+}
 export const saveSettings = (s) => saveJSON('myprint.settings', s);
 export const loadDraft = () => loadJSON('myprint.draft', DEFAULT_DRAFT);
 export const saveDraft = (d) => saveJSON('myprint.draft', d);

@@ -211,3 +211,49 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
 .toast { pointer-events: auto; background: #18211f; color: #fff; padding: 10px 14px; border-radius: 12px; max-width: 520px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.3); display: flex; gap: 12px; align-items: center; }
 .toast.err { background: #7a1a12; }
 .toast button { background: none; border: 0; color: #7cf0df; font: inherit; font-weight: 700; cursor: pointer; }
+
+/* ---------- studio templates */
+.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.tpl { display: flex; gap: 8px; align-items: center; text-align: left; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 12px; padding: 9px 10px; font: inherit; cursor: pointer; min-width: 0; }
+.tpl:hover { border-color: var(--accent); }
+.tpl.on { border-color: var(--accent); background: var(--accent-soft); }
+.tpl i { font-style: normal; font-size: 20px; flex: none; }
+.tpl b { display: block; font-size: 13px; line-height: 1.2; }
+.tpl small { display: block; color: var(--muted); font-size: 11px; line-height: 1.2; }
+#studioForm .f.list { grid-column: 1 / -1; }
+.lrows { display: grid; gap: 6px; }
+.lrow { display: flex; gap: 6px; align-items: center; }
+.lrow input[type="text"], .lrow select { padding: 7px 8px; font-size: 14px; }
+.lrow select { width: auto; flex: none; }
+.lrow .flex { flex: 1; min-width: 0; }
+.lrow .x { flex: none; height: 34px; width: 34px; border: 1px solid var(--line); background: none; border-radius: 9px; color: var(--muted); cursor: pointer; display: grid; place-items: center; }
+.lrow .x:hover { color: var(--danger); border-color: var(--danger); }
+.sketch-wrap { grid-column: 1 / -1; }
+.sketch-wrap canvas { width: 100%; max-width: 384px; height: auto; background: #fff; border: 2px dashed var(--line); border-radius: 8px; touch-action: none; cursor: crosshair; display: block; }
+.sketch-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.sketch-tools input[type="range"] { width: 110px; }
+.chip-btn.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+
+/* ---------- preview extras */
+.tele { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.tele .chip.hot { color: #b45309; background: #fef3c7; }
+.tele .chip.cool { color: var(--ok); }
+.banner { border-radius: 10px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 10px; }
+.banner.warn { background: #fef3c7; color: #78350f; }
+.banner.bad { background: #fee2e2; color: #7f1d1d; }
+.tools .btn { flex: 1 1 100px; min-height: 38px; padding: 6px 10px; font-size: 13px; }
+.roll { margin-top: 12px; }
+.paper { position: relative; }
+.paper canvas { mix-blend-mode: multiply; } /* lets the paper colour show through the white dots */
+.paper[data-tint="yellow"] { background: #fff2a8; }
+.paper[data-tint="kraft"] { background: #cfae83; }
+.paper[data-tint="blue"] { background: #d4eafd; }
+.paper[data-tint="pink"] { background: #ffd6e5; }
+.paper[data-tint="archival"] { background: #f4f1e6; }
+#labelGuide { position: absolute; left: 0; right: 0; border-top: 2px dashed #e11d48; pointer-events: none; }
+#labelGuide::after { content: "label end"; position: absolute; right: 4px; top: 2px; font-size: 10px; color: #e11d48; }
+
+dialog { border: 1px solid var(--line); border-radius: 16px; background: var(--card); color: var(--ink); padding: 0; width: min(640px, 94vw); }
+dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.dlg { padding: 16px; }
+.dlg textarea { font-size: 12px; }

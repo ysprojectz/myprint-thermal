@@ -121,7 +121,8 @@ async function imageToBW(b, cw) {
   const f = (259 * (ct + 255)) / (255 * (259 - ct));
   for (let i = 0; i < gray.length; i++) {
     const lum = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
-    gray[i] = Math.min(255, Math.max(0, f * (lum - 128) + 128 + br));
+    const v = Math.min(255, Math.max(0, f * (lum - 128) + 128 + br));
+    gray[i] = b.invert ? 255 - v : v;
   }
   return bwCanvas(dither(gray, w, h, b.dither || 'atkinson', b.threshold || 128), w, h);
 }
@@ -157,16 +158,41 @@ function patternCanvas(kind, cw) {
   return c;
 }
 
+function frameCanvas(c, style) {
+  const pad = style === 'polaroid' ? 14 : 6;
+  const out = newCanvas(c.width + pad * 2, c.height + pad * 2 + (style === 'polaroid' ? 10 : 0));
+  const ctx = ctx2d(out);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, out.width, out.height);
+  ctx.strokeStyle = '#000'; ctx.lineWidth = style === 'polaroid' ? 4 : 2;
+  ctx.strokeRect(ctx.lineWidth / 2, ctx.lineWidth / 2, out.width - ctx.lineWidth, out.height - ctx.lineWidth);
+  ctx.drawImage(c, pad, pad);
+  return out;
+}
+
+function qrCanvas(b, cw) {
+  const q = qrMatrix(b.data, b.ec);
+  const n = q.getModuleCount();
+  const mod = Math.max(1, Math.min(Math.round(b.size || 6), Math.floor(cw / n)));
+  const c = newCanvas(n * mod, n * mod);
+  const ctx = ctx2d(c);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) ctx.fillRect(k * mod, r * mod, mod, mod);
+  return c;
+}
+
 export async function prepareBlocks(blocks, cfg) {
   const cw = cfg.dots - 2 * cfg.margin;
   for (const b of blocks) {
     let src;
     if (b.t === 'image' && b.src) {
-      const key = [b.src.length, b.src.slice(-48), cw, b.scale, b.dither, b.brightness, b.contrast, b.threshold].join('|');
-      src = cache.get(key) || hold(key, await imageToBW(b, cw));
+      const key = [b.src.length, b.src.slice(-48), cw, b.scale, b.dither, b.brightness, b.contrast, b.threshold, b.invert, b.frame].join('|');
+      src = cache.get(key) || hold(key, await (async () => { const bw = await imageToBW(b, cw); return b.frame && b.frame !== 'none' ? frameCanvas(bw, b.frame) : bw; })());
     } else if (b.t === 'pattern') {
       const key = `p|${b.kind}|${cw}`;
       src = cache.get(key) || hold(key, patternCanvas(b.kind, cw));
+    } else if (cfg.codeRaster && b.data && (b.t === 'qr' || b.t === 'barcode')) {
+      src = b.t === 'qr' ? qrCanvas(b, cw) : barcodeCanvas(b, cw); // "raster engine": identical dots on every printer
     } else continue;
     // padded to full content width so alignment is baked in (printers differ on ESC a + raster)
     const full = newCanvas(cw, src.height);
@@ -264,21 +290,40 @@ function paintRaster(ctx, blocks, cfg, draw) {
   const xAt = (align, w) => m + (align === 'center' ? Math.round((cw - w) / 2) : align === 'right' ? cw - w : 0);
   let y = 4;
   for (const b of blocks) {
-    const s = Math.min(4, Math.max(1, b.size || 1));
+    const s = Math.min(4, Math.max(1, b.size || 1)) * (b.font === 'B' ? 0.78 : 1);
     switch (b.t) {
-      case 'text':
+      case 'text': {
         font(s, b.bold);
+        const vs = b.tall ? 2 : 1; // double-height text
         for (const line of wrapPx(ctx, b.text, cw)) {
-          const w = ctx.measureText(line).width, x = xAt(b.align, w), off = Math.round((lh(s) - base * s) / 2);
+          const w = ctx.measureText(line).width, x = xAt(b.align, w), off = Math.round((lh(s) - base * s) / 2), H = lh(s) * vs;
           if (draw) {
-            if (b.inv) { ctx.fillStyle = '#000'; ctx.fillRect(m, y, cw, lh(s)); }
+            if (b.inv) { ctx.fillStyle = '#000'; ctx.fillRect(m, y, cw, H); }
             ctx.fillStyle = b.inv ? '#fff' : '#000';
-            ctx.fillText(line, x, y + off);
-            if (b.ul) ctx.fillRect(x, y + lh(s) - 3, w, 2);
+            ctx.save(); ctx.translate(0, y); ctx.scale(1, vs); ctx.fillText(line, x, off); ctx.restore();
+            if (b.ul) ctx.fillRect(x, y + H - 3, w, 2);
           }
-          y += lh(s);
+          y += H;
         }
         break;
+      }
+      case 'cols': {
+        font(s, b.bold);
+        const cells = b.cells || [], n = Math.max(1, cells.length), step = cw / n;
+        if (draw) { ctx.fillStyle = '#000'; cells.forEach((c, i) => ctx.fillText(String(c), m + i * step, y + Math.round((lh(s) - base * s) / 2))); }
+        y += lh(s);
+        break;
+      }
+      case 'box': {
+        font(s, b.bold);
+        const lines = wrapPx(ctx, b.text, cw - 24), H = lines.length * lh(s) + 16;
+        if (draw) {
+          ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.strokeRect(m + 1, y + 2, cw - 2, H - 4);
+          ctx.fillStyle = '#000'; lines.forEach((l, i) => ctx.fillText(l, m + 12, y + 8 + i * lh(s) + Math.round((lh(s) - base * s) / 2)));
+        }
+        y += H + 4;
+        break;
+      }
       case 'row': {
         font(s, b.bold);
         const right = String(b.right ?? ''), rw = ctx.measureText(right).width;
@@ -334,7 +379,7 @@ export function renderRaster(blocks, cfg) {
 export function renderNativePreview(layout, cfg) {
   const { ops, cell } = layout;
   const W = cfg.dots, m = cfg.margin, cw = W - 2 * m;
-  const pitch = 30; // default ESC/POS line pitch in dots
+  const pitch = cfg.lineSpacing || 30; // ESC 3 n line pitch in dots (default 30)
   const probe = ctx2d(newCanvas(10, 10));
   probe.font = '100px monospace';
   const glyphPx = (cellW) => (cellW / (probe.measureText('M').width / 100));
@@ -343,7 +388,7 @@ export function renderNativePreview(layout, cfg) {
     let y = 4;
     for (const o of ops) {
       if (o.k === 'line') {
-        const cellW = cell * o.w, h = pitch * o.h;
+        const cellW = (o.font === 'B' ? 9 : cell) * o.w, h = pitch * o.h;
         const text = [...normalizeForCodepage(o.text, cfg.codepage).str];
         const w = text.length * cellW;
         const x0 = m + (o.align === 'center' ? Math.round((cw - w) / 2) : o.align === 'right' ? cw - w : 0);
@@ -354,7 +399,9 @@ export function renderNativePreview(layout, cfg) {
           ctx.font = `${o.bold ? 700 : 400} ${px}px monospace`;
           ctx.textBaseline = 'middle';
           ctx.textAlign = 'center';
-          text.forEach((ch, i) => ctx.fillText(ch, x0 + i * cellW + cellW / 2, y + h / 2));
+          ctx.save(); ctx.translate(0, y + h / 2); ctx.scale(1, o.h / o.w); // double-height text
+          text.forEach((ch, i) => ctx.fillText(ch, x0 + i * cellW + cellW / 2, 0));
+          ctx.restore();
           ctx.textAlign = 'left';
           if (o.ul) ctx.fillRect(x0, y + h - 4, w, 2);
         }
@@ -391,4 +438,12 @@ export function attachPreviewCanvases(layout) {
     ctx.putImageData(id, 0, 0);
     o.canvas = c;
   }
+}
+
+/** Share of black dots (0..1) in a binarized canvas — a proxy for thermal head load. */
+export function blackRatio(canvas) {
+  const d = ctx2d(canvas).getImageData(0, 0, canvas.width, canvas.height).data;
+  let n = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i] < 128) n++;
+  return n / (d.length / 4);
 }

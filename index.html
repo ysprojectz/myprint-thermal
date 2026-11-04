@@ -43,6 +43,7 @@
     <div class="col-edit">
       <div class="seg" id="kindSeg" role="tablist">
         <button data-kind="receipt" class="on">Receipt</button>
+        <button data-kind="studio">Studio</button>
         <button data-kind="text">Text</button>
         <button data-kind="code">QR / Barcode</button>
         <button data-kind="image">Image</button>
@@ -104,6 +105,19 @@
           <button class="btn" id="tplLoad">Load</button>
           <button class="btn ghost danger" id="tplDel">Delete</button>
         </div>
+      </div>
+
+      <!-- Studio -->
+      <div class="card kind" data-kind="studio">
+        <div class="tpl-grid" id="tplGrid" role="listbox" aria-label="Templates"></div>
+        <div class="row-actions">
+          <button class="btn" id="presetSave">Save preset</button>
+          <button class="btn" id="presetLoad">Load preset</button>
+          <input type="file" id="presetFile" accept="application/json,.json" hidden>
+          <button class="btn ghost" id="presetReset">Reset this template</button>
+        </div>
+        <h3 id="studioTitle">Template</h3>
+        <div class="fields" id="studioForm"></div>
       </div>
 
       <!-- Text -->
@@ -182,8 +196,22 @@
           <span class="chip" id="modeChip">—</span>
           <span class="chip muted" id="sizeChip">—</span>
         </div>
-        <div class="paper-wrap"><div class="paper" id="paper"><canvas id="prevCanvas"></canvas><pre id="prevHex" hidden></pre></div></div>
+        <div class="banner warn" id="heatWarn" hidden><b>High head load (&gt;35% black).</b> Solid areas can stall or overheat a battery printer — use Atkinson dithering or raise the delay between chunks (Printer → Transfer speed).</div>
+        <div class="banner bad" id="labelWarn" hidden></div>
+        <div class="paper-wrap"><div class="paper" id="paper"><canvas id="prevCanvas"></canvas><div id="labelGuide" hidden></div><pre id="prevHex" hidden></pre></div></div>
         <p class="err" id="prevErr" hidden></p>
+        <div class="tele" id="tele">
+          <span class="chip muted" id="telSpec">—</span>
+          <span class="chip muted" id="telLen">—</span>
+          <span class="chip muted" id="telBytes">—</span>
+          <span class="chip" id="telHeat">—</span>
+        </div>
+        <div class="row-actions tools">
+          <button class="btn" id="savePng">Save PNG</button>
+          <button class="btn" id="archiveBtn" title="Keep a digital copy in History without printing">Archive</button>
+          <button class="btn" id="osPrint">OS print</button>
+          <button class="btn" id="hexBtn">Hex bytes</button>
+        </div>
       </div>
     </div>
   </div>
@@ -244,6 +272,17 @@
         <label class="f"><span>Feed after print (lines)</span><input type="number" min="0" max="20" data-s="feed"></label>
         <label class="f"><span>Paper cutter</span><select data-s="cut"><option value="none">None (tear-off)</option><option value="partial">Partial cut</option><option value="full">Full cut</option></select></label>
         <label class="check wide"><input type="checkbox" data-s="drawer"> Open cash drawer after printing</label>
+        <label class="f"><span>Media / sensor</span><select data-s="paper.media"><option value="continuous">Continuous roll</option><option value="diecut">Die-cut labels (gap)</option><option value="blackmark">Black-mark tags</option></select></label>
+        <label class="f"><span>Label height (mm, 0 = auto)</span><input type="number" min="0" max="300" list="hList" data-s="paper.labelH"><datalist id="hList"><option>0</option><option>25</option><option>30</option><option>40</option><option>50</option></datalist></label>
+        <label class="f" data-show-when="label"><span>Label width (mm)</span><input type="number" min="10" max="48" data-s="paper.labelW"></label>
+        <label class="f"><span>Line spacing (ESC 3 n)</span><select data-s="paper.lineSpacing"><option value="20">20 · ultra-tight</option><option value="24">24 · compact</option><option value="30">30 · standard</option><option value="42">42 · relaxed</option></select></label>
+        <label class="f"><span>Top feed (lines)</span><input type="number" min="0" max="20" data-s="paper.topFeed"></label>
+        <label class="f"><span>Preview paper colour</span><select data-s="tint"><option value="white">White</option><option value="yellow">Sticky yellow</option><option value="kraft">Eco kraft</option><option value="blue">Pastel blue</option><option value="pink">Pastel pink</option><option value="archival">Archival matte</option></select></label>
+      </div>
+      <div class="row-actions roll">
+        <span class="chip" id="rollLabel">—</span>
+        <button class="btn" data-macro="gap" title="Sends GS FF (0x1D 0x0C) to move one label to the tear bar">Calibrate gap</button>
+        <button class="btn ghost" id="rollReset">Reset roll</button>
       </div>
       <p class="hint" id="layoutInfo"></p>
     </div>
@@ -263,8 +302,12 @@
         <label class="f"><span>Black level <output data-out="threshold"></output></span><input type="range" min="60" max="220" data-s="threshold"></label>
         <label class="f"><span>Image command</span><select data-s="imageCmd"><option value="gsv0">GS v 0 (standard)</option><option value="escstar">ESC * (older printers)</option></select></label>
         <label class="f"><span>Raster band height (rows)</span><input type="number" min="8" max="255" data-s="strip"></label>
+        <label class="f wide"><span>QR &amp; barcode engine</span><select data-s="qrEngine"><option value="native">Native ESC/POS (GS ( k / GS k) — fastest</option><option value="raster">Raster bitmap — identical on every printer</option></select></label>
+        <label class="check wide"><input type="checkbox" data-s="translit"> Keep text native: print ₹ as “Rs.”, € as “EUR” instead of switching to graphic mode</label>
+        <label class="check wide"><input type="checkbox" data-s="buzzer"> Beep after each print (0x1E — your self-test lists a passive buzzer)</label>
         <label class="check"><input type="checkbox" data-s="densityOn"> Send darkness command (ESC 7)</label>
-        <label class="f"><span>Darkness <output data-out="density"></output>%</span><input type="range" min="0" max="100" data-s="density"></label>
+        <label class="f"><span>Darkness level <output data-out="density"></output></span><input type="range" min="0" max="100" data-s="density"></label>
+        <div class="chips wide" id="densityChips"><button class="chip-btn" data-density="25">Eco 25</button><button class="chip-btn" data-density="38">Standard 38 (self-test)</button><button class="chip-btn" data-density="45">Dark 45</button></div>
       </div>
       <p class="hint">Your self-test reports “Print depth 38 level”. Darkness here uses the common <code>ESC 7</code> heat-time command; printers that don't support it simply ignore it.</p>
     </div>
@@ -290,6 +333,10 @@
         <button class="btn" data-test="gradient">Darkness steps</button>
         <button class="btn" data-test="checker">Dead-dot check</button>
         <button class="btn" data-test="feed">Feed paper</button>
+        <button class="btn" data-macro="feed3">Feed 3 lines</button>
+        <button class="btn" data-macro="beep">Beep</button>
+        <button class="btn" data-macro="cut">Cut</button>
+        <button class="btn" data-macro="init">Reset (ESC @)</button>
       </div>
       <details class="fold" open>
         <summary>Console</summary>
@@ -331,6 +378,18 @@
   </div>
 </section>
 </main>
+
+<dialog id="hexDlg">
+  <div class="dlg">
+    <h2>ESC/POS payload <small class="muted" id="hexLen"></small></h2>
+    <textarea id="hexOut" readonly rows="14" spellcheck="false"></textarea>
+    <div class="row-actions">
+      <button class="btn" id="hexDl">Download .bin</button>
+      <button class="btn" id="hexCopy">Copy Uint8Array</button>
+      <button class="btn primary" id="hexClose">Close</button>
+    </div>
+  </div>
+</dialog>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
 

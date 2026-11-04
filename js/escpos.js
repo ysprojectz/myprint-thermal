@@ -48,6 +48,13 @@ export function normalizeForCodepage(str, cp = 'PC850') {
   return { str: out, lossy };
 }
 
+/** Optional "keep it native" fallback: swap symbols the codepage lacks for ASCII look-alikes (₹ → Rs.). */
+export function translit(str, cp = 'PC850') {
+  let s = String(str ?? '').replace(/₹/g, 'Rs.').replace(/[✓✔]/g, '[x]').replace(/[✗✘]/g, '[ ]').replace(/[★☆]/g, '*').replace(/♥/g, '<3');
+  if (cp === 'PC850') s = s.replace(/€/g, 'EUR ');
+  return s;
+}
+
 export function encodeText(str, cp = 'PC850') {
   const { str: s, lossy } = normalizeForCodepage(str, cp);
   const map = table(cp);
@@ -65,7 +72,7 @@ export class EscPos {
   constructor(cfg) {
     this.cfg = cfg;
     this.parts = [];
-    this.st = { align: 0, bold: 0, ul: 0, w: 1, h: 1, inv: 0 };
+    this.st = { align: 0, bold: 0, ul: 0, w: 1, h: 1, inv: 0, font: cfg.font === 'B' ? 1 : 0 };
   }
   cmd(...b) { this.parts.push(Uint8Array.from(b)); return this; }
   put(u8) { this.parts.push(u8); return this; }
@@ -83,18 +90,22 @@ export class EscPos {
     if (native) {
       this.cmd(0x1b, 0x74, CODEPAGES[c.codepage]?.id ?? 2); // ESC t n
       this.cmd(0x1b, 0x4d, c.font === 'B' ? 1 : 0); // ESC M n
+      if (c.lineSpacing) this.cmd(0x1b, 0x33, clamp(c.lineSpacing, 0, 255)); // ESC 3 n
       if (c.margin > 0) {
         const w = c.dots - 2 * c.margin;
         this.cmd(0x1d, 0x4c, c.margin & 255, c.margin >> 8); // GS L
         this.cmd(0x1d, 0x57, w & 255, w >> 8); // GS W
       }
     }
-    if (c.densityOn) this.cmd(0x1b, 0x37, 7, Math.round(40 + c.density * 1.6), 2); // ESC 7 n1 n2 n3
-    return this;
+    // ESC 7 n1 n2 n3: heating dots, heating time (x10 us), interval. Level 38 (your self-test) maps to the common default 80.
+    if (c.densityOn) this.cmd(0x1b, 0x37, 7, clamp(20 + c.density * 1.6, 3, 255), 2);
+    return this.feed(c.topFeed);
   }
 
-  style({ align = 'left', bold = false, ul = false, w = 1, h = 1, inv = false } = {}) {
+  style({ align = 'left', bold = false, ul = false, w = 1, h = 1, inv = false, font } = {}) {
     const st = this.st;
+    const f = (font || this.cfg.font) === 'B' ? 1 : 0;
+    if (f !== st.font) { this.cmd(0x1b, 0x4d, f); st.font = f; }
     const a = { left: 0, center: 1, right: 2 }[align] ?? 0;
     if (a !== st.align) { this.cmd(0x1b, 0x61, a); st.align = a; }
     if (+bold !== st.bold) { this.cmd(0x1b, 0x45, +bold); st.bold = +bold; }
@@ -171,9 +182,11 @@ export class EscPos {
 
   finish() {
     const c = this.cfg;
-    this.style(); // reset alignment/bold/size
+    this.style(); // reset alignment/bold/size/font
+    if (c.media && c.media !== 'continuous') this.cmd(0x0c); // FF: advance die-cut / black-mark stock to the next label gap
     this.feed(c.feed);
     if (c.drawer) this.drawer();
+    if (c.buzzer) this.cmd(0x1e); // beeper (model specific — see README)
     return this.cut(c.cut);
   }
 }
@@ -201,30 +214,55 @@ export function wrap(text, width) {
   return out;
 }
 
-export function cellWidth(cfg) { return cfg.font === 'B' ? 9 : 12; }
-export function columns(cfg) { return Math.max(8, Math.floor((cfg.dots - 2 * cfg.margin) / cellWidth(cfg))); }
+/** Font A cells are 12 dots wide, font B 9. A block may ask for font 'B' regardless of the global font. */
+export function cellWidth(cfg, font) { return (font || cfg.font) === 'B' ? 9 : 12; }
+export function columns(cfg, font) { return Math.max(8, Math.floor((cfg.dots - 2 * cfg.margin) / cellWidth(cfg, font))); }
 
 /** blocks -> printer-ready ops with all wrapping resolved to character cells. */
 export function layoutNative(blocks, cfg) {
   const cols = columns(cfg);
   const ops = [];
-  const lineOp = (text, b, s) =>
-    ops.push({ k: 'line', text, align: b.align || 'left', bold: !!b.bold, ul: !!b.ul, inv: !!b.inv, w: s, h: s });
+  const tr = cfg.translit ? (s) => translit(s, cfg.codepage) : (s) => String(s ?? '');
+  const lineOp = (text, b, s, font) =>
+    ops.push({
+      k: 'line', text, align: b.align || 'left', bold: !!b.bold, ul: !!b.ul, inv: !!b.inv,
+      w: s, h: b.tall ? clamp(s * 2, 1, 8) : s, font: font || cfg.font,
+    });
   for (const b of blocks) {
     const s = clamp(b.size || 1, 1, 4);
-    const width = Math.max(1, Math.floor(cols / s));
+    const font = b.font || cfg.font;
+    const bcols = columns(cfg, font);
+    const width = Math.max(1, Math.floor(bcols / s));
     switch (b.t) {
       case 'text':
-        for (const l of wrap(b.text, width)) lineOp(l, b, s);
+        for (const l of wrap(tr(b.text), width)) lineOp(l, b, s, font);
         break;
       case 'row': {
-        const right = String(b.right ?? '');
+        const right = tr(b.right);
         const rl = [...right].length;
-        const ls = wrap(b.left, Math.max(1, width - rl - 1));
+        const ls = wrap(tr(b.left), Math.max(1, width - rl - 1));
         const first = ls[0] ?? '';
         const pad = Math.max(1, width - [...first].length - rl);
-        lineOp(first + ' '.repeat(pad) + right, { ...b, align: 'left' }, s);
-        for (const l of ls.slice(1)) lineOp(l, { ...b, align: 'left' }, s);
+        lineOp(first + ' '.repeat(pad) + right, { ...b, align: 'left' }, s, font);
+        for (const l of ls.slice(1)) lineOp(l, { ...b, align: 'left' }, s, font);
+        break;
+      }
+      case 'cols': { // equal-width columns on one line (spec tables, labels)
+        const cells = (b.cells || []).map((c) => [...tr(c)]);
+        const n = Math.max(1, cells.length), cw = Math.floor(width / n);
+        const line = cells.map((c, i) => {
+          const w = i < n - 1 ? cw : width - cw * (n - 1);
+          return c.slice(0, Math.max(1, w - (i < n - 1 ? 1 : 0))).join('').padEnd(w, ' ');
+        }).join('');
+        lineOp(line, { ...b, align: 'left' }, s, font);
+        break;
+      }
+      case 'box': { // +-----+ framed paragraph
+        const inner = Math.max(1, bcols - 4);
+        const rule = '+' + '-'.repeat(bcols - 2) + '+';
+        lineOp(rule, { ...b, align: 'left' }, 1, font);
+        for (const l of wrap(tr(b.text), inner)) lineOp('| ' + l + ' '.repeat(inner - [...l].length) + ' |', { ...b, align: 'left' }, 1, font);
+        lineOp(rule, { ...b, align: 'left' }, 1, font);
         break;
       }
       case 'hr': {
@@ -233,7 +271,8 @@ export function layoutNative(blocks, cfg) {
         break;
       }
       case 'qr': case 'barcode':
-        if (b.data) ops.push({ k: b.t, ...b });
+        if (b._img) ops.push({ k: 'image', packed: b._img.packed }); // "raster QR/barcode engine" setting
+        else if (b.data) ops.push({ k: b.t, ...b });
         break;
       case 'image': case 'pattern':
         if (b._img) ops.push({ k: 'image', packed: b._img.packed });
